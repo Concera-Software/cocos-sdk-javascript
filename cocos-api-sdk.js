@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2016-??-??
- * @lastChange		2020-07-15
- * @version		1.20.196
+ * @lastChange		2020-08-27
+ * @version		1.20.239
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,47 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-08-27		1.20.239	SvB
+ *  	[Security] Added check on userId/userHash and sessionId/sessionHash, received on the payload
+ * 	of the accessToken. When an unexpected change is detected, the cocosCallbackUserSwitched-function
+ *	will be called (if available). Otherwise, the application will reload.
+ *
+ *  2020-08-18		1.20.230	SvB
+ *  	[Changed] Changed handling for idDevice/deviceName and idTopology/topologyName from accessToken.
+ *	[Added] Added _hasPayloadData-function, for checking if a data-element exists in the payload
+ *	of the accessToken.
+ *	[Changed] Changed the login-function, expanding with locations.
+ *	[Changed] Improved handling of the _handleError-function, using new _getErrorsFromResponse-function.
+ *	[Fixed] When the status-request (using .isAvailable) returns a 401-statusCode, cookies will be
+ *	reset and the request will be retried again automatically. Instead of giving an error the token is
+ *	expired/invalid.
+ *	[Changed] Updated the isAuthorized-function, adding the response and requestHandler-object to the
+ *	callback-functions.
+ *
+ *  2020-08-11		1.20.223	SvB
+ *  	[Added] Added methods here() and whoami() for executing request on the CoCoS API.
+ *	[Fixed] Solved a issue which caused the callbackError to be executed twice when incorrect JSON
+ *	was returned.
+ *	[Added] Added methods getDeviceId(), getDeviceName(), getTopologyId() and getTopologyName() for
+ *	getting information from the data-element of the accessToken/JWT. This will be automatically be
+ *	handled by the _handleAccessToken-function.
+ *	[Changed] Changed the _setCookie-function, in order to send a timestamp/age for the cookie to
+ *	expire.
+ *	[Added] Added method handleLocation for executing the /auht/here-request onto the CoCoS API,
+ *	telling the location/topology of the user/session and (optionally), on success, saving the
+ *	prefered location into a cookie. So the next time a user must tell where he/she is, we can
+ *	pre-select the last known location the the client's computer.
+ * 
+ *  2020-08-07		1.20.219	SvB
+ *  	[Added] Added method setIAm() and handling for sending the iam-value to the CoCoS API when
+ *	executing requests to be able to pretend to be another device.
+ *
+ *  2020-07-23		1.20.204	SvB
+ *  	[Fixed] Solved a issue with the loginExpired-callback. When the timer is running, (for example
+ *	because the application is started with an unauthorized session) but the user who logs in has
+ *	an unlimited session, the timer will be stopped in order to prevent the loginExpiredCallback to
+ *	get raised after the default unauthorizedSessionTimeout expires.
  *
  *  2020-07-15		1.20.196	SvB
  *  	[Fixed] Fixed a bug in the _getPayload, _getPayloadMeta, _getPayloadData. When a key is
@@ -189,7 +230,7 @@
  */
 var cocosAPI = function(host, path, apiKey, freshStart)
 {
-	var JS_SDK_VERSION = '1.20.196';
+	var JS_SDK_VERSION = '1.20.223';
 
 	/***
 	 *      ___ ___ ___ _____ ___ ___  _  _   _   _
@@ -279,9 +320,25 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	 */
 	var PARAM_ACCESS_TOKEN = 'accessToken';
 
+	/**
+	 * { item_description }
+	 */
 	var HEADER_DEVICE_KEY = 'X-Device-Key';
 
+	/**
+	 * { item_description }
+	 */
 	var PARAM_DEVICE_KEY = 'deviceKey';
+
+	/**
+	 * { item_description }
+	 */
+	var HEADER_I_AM = 'X-I-Am';
+
+	/**
+	 * { item_description }
+	 */
+	var PARAM_I_AM = 'iam';
 
  	/**
  	 * Name of the parameter to use in the URL when an endless-call will be made.
@@ -470,6 +527,24 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	var PATH_AUTH = '/auth/me';
 
 	/**
+	 * The path to use to post the location of the current user.
+	 *
+	 * @constant
+	 * @type     {String}
+	 * @default  '/auth/here'
+	 */
+	var PATH_HERE = '/auth/here';
+
+	/**
+	 * The path to use to get information about the current session/client.
+	 *
+	 * @constant
+	 * @type     {String}
+	 * @default  '/whoami'
+	 */
+	var PATH_WHOAMI = '/whoami';
+
+	/**
 	 * The path to used to get te status of the API, so is't availability
 	 * can be checked.
 	 *
@@ -515,6 +590,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	var COOKIE_NAME_TOKEN = 'token';
 	var COOKIE_NAME_COOKIES = 'cookies';
 	var COOKIE_NAME_CROSS_DOMAIN_COOKIES = 'crossdomaincookies';
+	var COOKIE_NAME_LOCATION = 'location';
 
 	var COCOS_API_ACTION_LOGIN = 'login';
 	var COCOS_API_ACTION_AUTHENTICATE = 'authenticate';
@@ -1172,6 +1248,27 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	var cocosDeviceKey = '';
 
 	/**
+	 * This variable will be used for saving the iAm-parameter for the CoCoS
+	 * API, so it can be send with the request when calling the API again.
+ 	 *
+ 	 * @var     cocosAPI.cocosDeviceKey
+	 * @type    {String}
+	 * @default ''
+	 * @access  private
+	 *
+	 * @see     {@link cocosAPI.setIAm}
+	 * @see	    {@link cocosAPI._getIAm}
+	 */
+	var cocosIAm = '';
+
+	//
+	var cocosDeviceId = null;
+	var cocosDeviceName = null;
+
+	var cocosTopologyId = null;
+	var cocosTopologyName = null;
+
+	/**
 	 * This variable will be used for saving the maximum time (in seconds) a
 	 * request may take before an abort will be sent and an (timeout)error
 	 * will be returned.
@@ -1269,6 +1366,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	cocosCookieNames[COOKIE_NAME_TOKEN] = 'AccessToken';
 	cocosCookieNames[COOKIE_NAME_COOKIES] = 'CookiesAllowed';
 	cocosCookieNames[COOKIE_NAME_CROSS_DOMAIN_COOKIES] = 'CrossDomainCookiesAllowed';
+	cocosCookieNames[COOKIE_NAME_LOCATION] = 'RecentLocation';
 	
 	var cocosCookiePrefix = 'CoCoS';
 
@@ -1429,6 +1527,8 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	 */
 	var cocosCallbackLogToConsole;
 
+	var cocosCallbackUserSwitched;
+
 	/**
 	 * This variable will be used to hold the debug-bool. When set to true,
 	 * debug will be enabled.
@@ -1490,6 +1590,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	 */
 	var _activeRequests = {};
 
+	var _activeUserId = null;
 	var _activeSessionHash = null;
 
 	/**
@@ -2002,6 +2103,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 				case COOKIE_NAME_TOKEN:
 				case COOKIE_NAME_COOKIES:
 				case COOKIE_NAME_CROSS_DOMAIN_COOKIES:
+				case COOKIE_NAME_LOCATION:
 					cososCookieNames[cookie] = name;
 					break;
 				
@@ -2455,6 +2557,20 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	};
 
 	/**
+	 * ...
+	 */
+	this.setCallbackUserSwitched = function(switchedUserFunction)
+	{
+		if(_isFunction(switchedUserFunction))
+		{
+			cocosCallbackUserSwitched = switchedUserFunction;
+			return true;
+		}
+
+		return false;
+	};
+
+	/**
 	 * [enableDebug description]
 	 *
 	 * @method cocosAPI.enableDebug
@@ -2864,6 +2980,40 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	};
 
 	/**
+	 * [_hasPayloadData description]
+	 *
+	 * @method cocosAPI._getPayloadData
+	 * @access private
+	 * @param  {String}  key  [description]
+	 * @return {Array}        [description]
+	 */
+	var _hasPayloadData = function(key, accessToken)
+	{
+		if(!_isset(accessToken) || _isEmpty(accessToken))
+		{
+			accessToken = _getAccessToken();
+		}
+
+		// Get payload from JWT-token
+		//
+		var payload = _getPayload(null, accessToken);
+
+		// Check if payload-data exists
+		//
+		if(_isset(payload['data']))
+		{
+			var data = payload['data'];
+
+			if(_isset(data[key], true))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	};
+
+	/**
 	 * [_getPayloadData description]
 	 *
 	 * @method cocosAPI._getPayloadData
@@ -3065,7 +3215,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	 				{
 	 					// Get time (now). Check if it's correct.
 	 					//
-	 					if(parseInt(_getPayload('now', accessToken)) > 0)
+	 					if((parseInt(_getPayload('now', accessToken)) > 0) && _isTrue(extendLoginExpireTimeout))
 	 					{
 							// Get the timestamp of when the accessToken
 							// expires. If found, go set a new time for
@@ -3076,22 +3226,93 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 							// the exp is 1000004900, we'll set a timer
 							// for 900 seconds = 15 minutes.
 							//
-							if((parseInt(_getPayload('exp', accessToken)) > 0) && _isTrue(extendLoginExpireTimeout))
+							if(parseInt(_getPayload('exp', accessToken)) > 0)
 							{
 								var loginTimeout = (parseInt(_getPayload('exp', accessToken))-parseInt(_getPayload('now', accessToken)));
 								_setLoginExpireTimeout(loginTimeout);
 							}
+							else
+							{
+								_setLoginExpireTimeout(0);
+							}
+						}
+						else
+						{
+							_setLoginExpireTimeout(0);
 						}
 					}
 	 			}
 	 		}
 		}
 
+		if(_hasPayloadData('deviceId') && _hasPayloadData('deviceName'))
+		{
+			//
+			cocosDeviceId = _getPayloadData('deviceId');
+			if(!_isEmpty(cocosDeviceId) && (cocosDeviceId != 0))
+			{
+				cocosDeviceName = _getPayloadData('deviceName');
+			}
+		}
+
+		if(_hasPayloadData('topologyId') && _hasPayloadData('topologyName'))
+		{
+			//
+			cocosTopologyId = _getPayloadData('topologyId');
+			if(!_isEmpty(cocosTopologyId) && (cocosTopologyId != 0))
+			{
+				cocosTopologyName = _getPayloadData('topologyName');
+			}
+		}
+
+		var sessionSwitched = false;
+		var userSwitched = false;
+
 		var sessionHash = _getPayloadMeta(1);
 		if(_activeSessionHash != sessionHash)
 		{
 			_logToConsole('JWT-sessionHash changed from \'' + _activeSessionHash + '\' to \'' + sessionHash + '\'.');
-			_activeSessionHash = sessionHash;
+			sessionSwitched = (!_isNull(_activeSessionHash) && !_isEmpty(sessionHash))
+
+			if(!_isEmpty(sessionHash))
+			{
+				_activeSessionHash = sessionHash;
+			}
+			else
+			{
+				_activeSessionHash = null;
+			}
+		}
+
+		var userId = _getPayloadData('id');
+		if(_activeUserId != userId)
+		{
+			_logToConsole('JWT-userid changed from \'' + _activeUserId + '\' to \'' + userId + '\'.');
+			userSwitched = (!_isNull(_activeUserId) && (parseInt(userId) != 0));
+
+			if(parseInt(userId) != 0)
+			{
+				_activeUserId = userId;
+			}
+			else
+			{
+				_activeUserId = null;
+			}
+
+			//
+			if(parseInt(userId) == 0)
+			{
+				// Reset sessionSwitched when the active user was reset to 0. This
+				// means the user has logged out
+				//
+				sessionSwitched = false;
+			}
+		}
+
+		if(_isTrue(sessionSwitched) || _isTrue(userSwitched))
+		{
+			console.warn("userId or sessionHash changed!");
+			_executeCallbackUserSwitched();
 		}
 
  	}.bind(this);
@@ -3158,9 +3379,11 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	 */
 	var _setLoginExpireTimeout = function(duration)
 	{
+		//
+		_clearLoginExpireTimer();
+
 		if((parseInt(duration) > 0) && (parseInt(duration) < 2147483647))
 		{
-			_clearLoginExpireTimer();
 			var timeout = (duration*1000);
 
 			// The maximum delay which can be set into JavaScripts setTimeout-function
@@ -3213,15 +3436,21 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	var _handleLoginExpiration = function()
 	{
 		var now = _now();
-		var expiration = cocosLoginExpirationTimestamp;
-		var remaining = (expiration - now);
+		var expiration = -1;
+		var remaining = -1;
+
+		if(cocosLoginExpirationTimestamp > 0)
+		{
+			expiration = cocosLoginExpirationTimestamp;
+			remaining = (expiration - now);
+		}
 
 		if(remaining < 0)
 		{
 			expiration = now;
 			remaining = -1;
 		}
-		
+
 		_executeCallbackExpiration(now, expiration, remaining);
 	}
 
@@ -3239,8 +3468,15 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 		var cookieOpts = [];
 		cookieOpts.push(_getCookieName(cookie)+'='+value);
 
-		if(_isset(expires))
+		if(_isset(expires) && !_isEmpty(expires))
 		{
+			if(_isNumber(expires))
+			{
+				var d = new Date();
+				d.setTime(expires*1000);
+				expires = d.toUTCString();
+			}
+
 			cookieOpts.push('Expires='+expires);
 		}
 
@@ -3317,6 +3553,11 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 		_setCookie(cookie, '', 'expires=Thu, 01-Jan-1970 00:00:01 GMT', _getCookiePath());
 	}
 
+	this.getLocationCookie = function()
+	{
+		return _getCookie(COOKIE_NAME_LOCATION);
+	};
+
 	/**
 	 * [_getCookie description]
 	 *
@@ -3347,7 +3588,6 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 		cookieValue = unescape(value.substring(start,end));
 
 		return cookieValue;
-
 	};
 
 	/**
@@ -3499,6 +3739,46 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	var _getDeviceKey = function()
 	{
 		return cocosDeviceKey;
+	}
+
+	/**
+	 * This function can be called to set the iAm-value which can be used
+	 * to communicate with the CoCoS API. Based on the iAm-value, it's
+	 * possible to identify yourself as an other/different device. For
+	 * example, when we want to (pre)view a (usr)app for a specific device/
+	 * location, we can call the application with ?iam=*idDevice*. The id of
+	 * the value of the iam-parameter will be used to identify which device
+	 * is using the application. Using the iam-value will be used instead
+	 * of the ipAddress (and deviceKey).
+	 *
+	 * @method cocosAPI.setIAm
+	 * @access public
+	 * @param  {String} iAm       The iAm-value to use when communicating
+	 *                            with the CoCoS API.
+	 * @return {Void}            [description]
+	 *
+	 * @see    {@link cocosApi.setIAm}
+	 * @see    {@link cocosApi._getIAm}
+	 */
+	this.setIAm = function(iAm)
+	{
+		cocosIAm = iAm;
+		return true;
+	};
+
+	/**
+	 * [_getIAm description]
+	 *
+	 * @method cocosAPI._getIAm
+	 * @access private
+	 * @return {String}  [description]
+	 *
+	 * @see    {@link cocosApi.cocosIAm}
+	 * @see    {@link cocosApi.setIAm}
+	 */
+	var _getIAm = function()
+	{
+		return cocosIAm;
 	}
 	
 
@@ -5679,7 +5959,12 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	 */
 	var _login = function(username, password, pin, token, verifier, successFunction, errorFunction, completeFunction, progressFunction)
 	{
-		data = {};
+		//
+		var options = {};
+		options['expand'] = 'locations';
+
+		//
+		var data = {};
 		if(_isset(username) && _isset(password))
 		{
 			data['username'] = username.toString();
@@ -5701,7 +5986,8 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 			data['verifier'] = verifier.toString();
 		}
 
-		return _post(PATH_LOGIN, null, data, successFunction, errorFunction, completeFunction, progressFunction);
+		//
+		return _post(PATH_LOGIN, options, data, successFunction, errorFunction, completeFunction, progressFunction);
 	}
 
 	/**
@@ -5775,16 +6061,47 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	 */
 	this.authorize = function(successFunction, errorFunction, completeFunction, progressFunction)
 	{
-		var options = null;
+		return _get(PATH_AUTH, null, null, successFunction, errorFunction, completeFunction, progressFunction);
+	}
 
-		// Deprecated
-		// 
-		// if(_isTrue(_deployOnAuthorize()))
-		// {
-		// 	options = {};
-		// 	options[PARAM_DEPLOY] = true;
-		// }
-		return _get(PATH_AUTH, options, null, successFunction, errorFunction, completeFunction, progressFunction);
+	/**
+	 * [here description]
+	 *
+	 * @method cocosAPI.login
+	 * @access private
+	 * @param  {String}    idTopology       [description]
+	 * @param  {Function}  successFunction  This parameter can be used to
+	 *					set the function that must be
+	 *					called when the request was
+	 *					succesfully. WHen no function is
+	 *					given, the default callback-
+	 *					function, given to the
+	 *					setCallbackSuccess-function will
+	 *					be called.
+	 * @param  {Function}  errorFunction    This parameter can be used to
+	 *					set the function that must be
+	 *					called when an error occures.
+	 *					WHen no function is given, the
+	 *					default callback-function, given
+	 *					to the setCallbackError-function
+	 *					will be called.
+	 * @param  {Function}  completeFunction This parameter can be used to
+	 *					set the function that must be
+	 *					called when a call to the CoCoS
+	 *					API is made. No mather if it was
+	 *					succesfull or gave an error.
+	 * @return {requestHandler}             This function will return the
+	 *					created requestHandler, which
+	 *					stores info abour the request and
+	 *					the XMLHttpRequest-object.
+	 */
+	this.here = function(idTopology, successFunction, errorFunction, completeFunction, progressFunction)
+	{
+		data = {
+			location: idTopology
+		};
+
+		return _post(PATH_HERE, null, data, successFunction, errorFunction, completeFunction, progressFunction);
 	}
 
 	/**
@@ -5863,6 +6180,19 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 			// rqh.sentApiKey = false;
 			// rqh.sentAccessToken = false;
 		});
+	}
+
+	/**
+	 * @brief      { function_description }
+	 * @param      successFunction   { parameter_description }
+	 * @param      errorFunction     { parameter_description }
+	 * @param      completeFunction  { parameter_description }
+	 * @param      progressFunction  { parameter_description }
+	 * @return     { description_of_the_return_value }
+	 */
+	this.whoami = function(successFunction, errorFunction, completeFunction, progressFunction)
+	{
+		return _get(PATH_WHOAMI, null, null, successFunction, errorFunction, completeFunction, progressFunction);
 	}
 
 	/**
@@ -6829,9 +7159,9 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 		//ajax object possibilities.
 		var XMLHttpFactories = [
 			function () {return new XMLHttpRequest()},
-			function () {return new ActiveXObject("Msxml2.XMLHTTP")},
-			function () {return new ActiveXObject("Msxml3.XMLHTTP")},
-			function () {return new ActiveXObject("Microsoft.XMLHTTP")}
+			function () {return new ActiveXObject('Msxml2.XMLHTTP')},
+			function () {return new ActiveXObject('Msxml3.XMLHTTP')},
+			function () {return new ActiveXObject('Microsoft.XMLHTTP')}
 		];
 
 		var xmlHttpObject = false;
@@ -7063,6 +7393,22 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 				}
 			}
 
+			var iAm = _getIAm();
+
+			// Append iAm to header or URL (if iAm is available)
+			//
+			if(!_isEmpty(iAm))
+			{
+				if(_isFunction(xhr.setRequestHeader) && (_useRequestHeaders() || _isTrue(ignoreDebug)))
+				{
+					headers[HEADER_I_AM] = iAm;
+				}
+				else
+				{
+					url = _appendToUrl(url, PARAM_I_AM, iAm);
+				}
+			}
+
 			if(_inDebug() && !_isTrue(ignoreDebug))
 			{
 				url = _appendToUrl(url, PARAM_DEBUG, 'true');
@@ -7206,7 +7552,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 			rqh.setRequestUrl(url);
 			rqh.setRequestHeaders(headers);
 
-			// console.log("Calling URL " + rqh.getProtocol()+'//'+rqh.getHost()+rqh.getFullPath() + " for rqh: " + rqh.handlerId);
+			// console.log('Calling URL ' + rqh.getProtocol()+'//'+rqh.getHost()+rqh.getFullPath() + ' for rqh: ' + rqh.handlerId);
 
 			try
 			{
@@ -7997,7 +8343,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 			}
 			else
 			{
-				_executeCallbackError(rqh, _getTextFromLib('responseInvalid'), '_handleResponse#7278');
+				// _executeCallbackError(rqh, _getTextFromLib('responseInvalid'), '_handleResponse#7278');
 			}
 		}.bind(this), 1);
 	}.bind(this);
@@ -8063,36 +8409,10 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 
 					if(_isset(response))
 					{
-						var errors = [];
-						var msgCount = 0;
-
-						if(_isset(response.info) && _isset(response.info.messages))
-						{
-							var messages = response.info.messages;
-							msgCount = _objectLength(messages);
-							for(var i=0; i<msgCount; i++)
-							{
-								var message = messages[i];
-								if(_isset(message.type) && (message.type == 'error'))
-								{
-									if(_isset(message.text))
-									{
-										errors.push(message.text);
-									}
-								}
-							}
-						}
-
+						var errors = _getErrorsFromResponse(response);
 						if(errors.length > 0)
 						{
 							error = errors.join('<br><br>');
-						}
-						else
-						{
-							if(msgCount == 0)
-							{
-								error += _getTextFromLib('gotErrorsButEmpty', [(_isset(response.httpStatusCode)?response.httpStatusCode:''), rqh.getProtocol()+'//'+rqh.getHost()+rqh.getFullPath()]);
-							}
 						}
 					}
 				}
@@ -8121,6 +8441,77 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 			_executeCallbackError(rqh, error, origin);
 		}
 	};
+
+	var _getErrorsFromResponse = function(response, rqh)
+	{
+		var errors = [];
+		var msgCount = 0;
+
+		if(_isset(response.info) && _isset(response.info.messages))
+		{
+			var messages = response.info.messages;
+			msgCount = _objectLength(messages);
+			for(var i=0; i<msgCount; i++)
+			{
+				var message = messages[i];
+				if(_isset(message.type) && (message.type == 'error'))
+				{
+					if(_isset(message.text))
+					{
+						errors.push(message.text);
+					}
+				}
+			}
+		}
+
+		if((errors.length == 0) && (msgCount > 0))
+		{
+			if(_isset(rqh) && _isObject(rqh))
+			{
+				errors.push(_getTextFromLib('gotErrorsButEmpty', [(_isset(response.httpStatusCode)?response.httpStatusCode:''), rqh.getProtocol()+'//'+rqh.getHost()+rqh.getFullPath()]));
+			}
+			else
+			{
+				errors.push(_getTextFromLib('gotErrorsButEmpty', [(_isset(response.httpStatusCode)?response.httpStatusCode:''), 'API']));
+			}
+		}
+
+		return errors;
+	}
+
+	this.getErrorsFromResponse = function(response, xhr, asArray)
+	{
+		if(_isset(response))
+		{
+			var errors = _getErrorsFromResponse(response);
+			if(errors.length > 0)
+			{
+				if(_isTrue(asArray))
+				{
+					return errors;
+				}
+
+				return errors.join('<br><br>');
+			}
+		}
+
+		if(_isTrue(asArray))
+		{
+			return [];
+		}
+		return '';
+	}
+
+	this.getErrorFromResponse = function(response, xhr)
+	{
+		var errors = this.getErrorsFromResponse(response, xhr, true);
+		if(errors.length > 0)
+		{
+			return errors[0];
+		}
+
+		return '';
+	}
 
 	/**
 	 * [_parseResponse description]
@@ -8152,6 +8543,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 				catch(e)
 				{
 					_executeCallbackError(rqh, _getTextFromLib('responseJSONInvalid'), '3579');
+					return '';
 				}
 				break;
 
@@ -8500,6 +8892,30 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 		}
 	};
 
+	/**
+	 * [_executeCallbackUserSwitched description]
+	 *
+	 * @method cocosAPI._executeCallbackUserSwitched
+	 * @access private
+	 * @return {Void}              [description]
+	 */
+	var _executeCallbackUserSwitched = function()
+	{
+		// Check if current callback function for progress is available
+		//
+		if(_isFunction(cocosCallbackUserSwitched))
+		{
+			setTimeout(function()
+			{
+				cocosCallbackUserSwitched();
+			}, 1);
+		}
+		else
+		{
+			window.location.reload();
+		}
+	};
+
  	/***
 	 *      ___ ___ ___ _____ ___ ___  _  _   _   _ ____
 	 *     / __| __/ __|_   _|_ _/ _ \| \| | (_) / |__ /
@@ -8602,6 +9018,21 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 		 * @see     {@link requestHandler.getPath}
 		 */
 		var _requestPath;
+
+		/**
+		 * This variable will store the full path that is used in the
+		 * request. This is the path from the request, including the
+		 * library and collection (if available) and identifier (if
+		 * available) and association (if available).
+		 *
+		 * @var     requestHandler._requestFullPath
+		 * @type    {String}
+		 * @access  private
+		 *
+		 * @see     {@link requestHandler._setFullPath}
+		 * @see     {@link requestHandler.getFullPath}
+		 */
+		var _requestFullPath;
 
 		/**
 		 * This variable will store the type
@@ -10364,13 +10795,39 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 					}
 				);
 			},
-			function(error, response)
+			function(error, response, xhr)
 			{
-				if(_isFunction(callbackFunction))
-				{
-					callbackFunction(false, error);
+				// A status-request doesn't require to be logged in or whatsoever.
+				// So when we get a 401-statusCode back after executing a request on
+				// /api/v1/status, this can/will probably indicate something is
+				// wrong with the given accessToken. For example, because the PHP-
+				// session expired, because the verification of some data in the
+				// payload failed (for example when the referrer, ip-address or
+				// userAgent suddenly changes).
+				// 
+				// To prevent failing directly, we'll reset the cookies and the
+				// results in the cocosApiResults-object and try again to get the
+				// status of the API.
+				// 
+				if(xhr.getHttpStatusCode() == 401)
+				{	
+					this.resetCookies();
+					cocosApiResults.COCOS_API_RESULT_AUTHORIZED = false;
+					cocosApiResults.COCOS_API_RESULT_USERDATA = null;
+
+					// Execute this same method again, but now without any
+					// accessToken/JWT.
+					// 
+					this.isAvailable(callbackFunction, checkLicensed);
 				}
-			}
+				else
+				{
+					if(_isFunction(callbackFunction))
+					{
+						callbackFunction(false, error);
+					}
+				}
+			}.bind(this)
 		)
 	}
 
@@ -10398,7 +10855,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 			this.authorize
 			(
 				// Function to be called when authorized
-				function(response)
+				function(response, rqh)
 				{
 					_checkAuthResponse
 					(
@@ -10420,19 +10877,19 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 
 							if(_isFunction(callbackFunction))
 							{
-								callbackFunction(authorized, userData);
+								callbackFunction(authorized, userData, response, rqh);
 							}
 						},
 						function()
 						{
 							if(_isFunction(callbackFunction))
 							{
-								callbackFunction(false, null);
+								callbackFunction(false, null, response, rqh);
 							}
 						}
 					);
 				},
-				function(error, response)
+				function(error, response, rqh)
 				{
 					if(_isObject(response))
 					{
@@ -10450,15 +10907,14 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 
 						if(_isFunction(callbackFunction))
 						{
-							callbackFunction(false, null);
+							return callbackFunction(false, null, response, rqh);
 						}
 					}
 					else
 					{
-
 						if(_isFunction(callbackFunction))
 						{
-							callbackFunction(false, null);
+							callbackFunction(false, null, response, rqh);
 						}
 						
 						// Check if a a default cocosCallbackError-function
@@ -10490,7 +10946,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 		}
 		else if(_isFunction(callbackFunction))
 		{
-			callbackFunction(cocosApiResults.COCOS_API_RESULT_AUTHORIZED, cocosApiResults.COCOS_API_RESULT_USERDATA);
+			callbackFunction(cocosApiResults.COCOS_API_RESULT_AUTHORIZED, cocosApiResults.COCOS_API_RESULT_USERDATA, null, null);
 		}
 	};
 
@@ -10503,7 +10959,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	{
 		if(!_isset(cocosApiResults.COCOS_API_RESULT_LOGGEDIN))
 		{
-			this.isAuthorized(function(authorized, userData)
+			this.isAuthorized(function(authorized, userData, response, xhr)
 			{
 				var loggedIn = false;
 				if(authorized && (_isset(userData['userid']) && (userData['userid'] > 0)))
@@ -10734,6 +11190,53 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 			 	}.bind(this)
 			 );
 		}
+	}
+
+	this.handleLocation = function(idTopology, callbackFunction, saveLocationCookie)
+	{
+		this.here(idTopology, function(response, xhr)
+		{
+			if(_isset(response.meta.result) && _isTrue(response.meta.result))
+			{
+				if(!_isFalse(saveLocationCookie))
+				{
+					_setCookie(COOKIE_NAME_LOCATION, idTopology, (_now() + 365*24*60*60), _getCookiePath());
+				}
+
+				callbackFunction(true, null, response, xhr);
+			}
+			else
+			{
+				var error = 'Error setting location';
+				callbackFunction(false, error, response, xhr);
+			}
+		}, function(error, response, xhr)
+		{
+			if(_isFunction(callbackFunction))
+			{
+				callbackFunction(false, error, response, xhr);
+			}
+		});
+	}
+
+	this.getDeviceId = function()
+	{
+		return cocosDeviceId;
+	}
+
+	this.getDeviceName = function()
+	{
+		return cocosDeviceName;
+	}
+
+	this.getTopologyId = function()
+	{
+		return cocosTopologyId;
+	}
+
+	this.getTopologyName = function()
+	{
+		return cocosTopologyName;
 	}
 
 	/**

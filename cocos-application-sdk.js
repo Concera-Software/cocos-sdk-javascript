@@ -8,8 +8,8 @@
  * @author(s)		Erwin Vorenhout, Stefan van Buren
  * @copyright 		Concera Software - https://concera.software/
  * @dateCreated		2018-02-xx
- * @lastChange		2020-05-06
- * @version		1.20.126
+ * @lastChange		2020-08-27
+ * @version		1.20.239
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,37 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-08-27		1.20.239	SvB
+ *  	[Changed] Changed reload-handling.
+ *
+ *  2020-08-18		1.20.230	SvB
+ *  	[Added] Function _handleLoginResponse added in order to fetch available locations from the
+ *	response of the loginRequest. When found, these will be stored so a new request isn't needed
+ *	anymore.
+ *	[Changed] Updated the getAvailableLocations-function, using locations from a local variable
+ *	from an earlier request (if available) and/or fetching the available locations from the
+ *	CoCoS API.
+ *	[Added] Added handling for when a device or location is found/available, but not actived.
+ *
+ *  2020-08-11		1.20.223	SvB
+ *  	[Added] Added a defaultTextLib for the application to use as fallback when no library is
+ *	available.
+ *	[Changed] The default languages for the application will come from the getBrowserLanguage()
+ *	function.
+ *	[Added] Added handling for the idDevice/deviceName and idTopology/topologyName during the
+ *	login/authorisation-process, saving which device and location we're dealing with.
+ *	[Added] Added method handleLocation() and addLocationOptions() for handling a user's location
+ *	(the location will be returned if one can be detected) and/or showing a list/expanding a select-
+ *	element when the user must choose the location manually.
+ *
+ *  2020-08-07		1.20.219	SvB
+ *  	[Added] Added automatic handling for the iam-parameter in order to be able to pretend to
+ *	be another device.
+ *
+ *  2020-07-23		1.20.204	SvB
+ *  	[Added] Added handling for the COCOS_APPLICATION_LOG_WELCOME_TO_API define. When set to
+ *	false, to application won't log to the CoCoS API on startup.
  *
  *  2020-05-06		1.20.126	SvB
  *  	[Changed] Changed method _handleNetworkInterruption. The full URL of the request will be
@@ -149,7 +180,7 @@ var app					=	null;
 //
 var apiConnector			=	null;
 
-var JS_APP_SDK_VERSION			=	'1.20.124';
+var JS_APP_SDK_VERSION			=	'1.20.223';
 
 // Variables for debug-purposes / debug-console.
 //
@@ -225,13 +256,17 @@ var cocosApplicationScriptsLoaded	=	0;
 var cocosApplicationStylesToLoad	=	0;
 var cocosApplicationStylesLoaded	=	0;
 
-// Check for availability of jQuery.
+// Start by checking the availability of jQuery. When not found, exit with an error directly.
+//
 if (typeof(jQuery) == 'undefined')
 {
 	console.error('jQuery not available. Please include jQuery in order to use the CoCoS-Application-SDK');
 }
 else
 {
+	// Check for the existence of the getRequestParameter-function. When not found, go create
+	// the function, so we're sure we can use it.
+	//
 	if(typeof(getRequestParameter) !== 'function')
 	{
 		function getRequestParameter(name, url)
@@ -245,13 +280,217 @@ else
 		}
 	}
 
+	
 	/**
-	 * Starts a co co s application.
+	 * In the window.onload-function, go create an array for the extra external scripts and
+	 * external stylesheets we'll need. 
+	 */
+	$(window).on('load', function()
+	{
+		cocosApplicationScriptsToLoad = 0;
+		cocosApplicationStylesToLoad = 0;
+
+		// Go create array for scripts
+		//
+		var cocosApplicationScripts = [];
+		cocosApplicationScripts.push('/sdk/js/cocos-javascript-functions.js');
+		cocosApplicationScripts.push('/sdk/js/cocos-jquery-functions.js');
+		cocosApplicationScripts.push('/sdk/js/cocos-api-sdk.js');
+
+		// Go create array for stylesheets
+		//
+		var cocosApplicationStyles = [];
+
+		// Only add the cocos-reset.css file, when the cocosApplicationUseResetCss() allows
+		// it. This function will check a constant/define in order to determine whether or
+		// not the reset-css should be added/used.
+		//
+		if(cocosApplicationUseResetCss())
+		{
+			cocosApplicationStyles.push('/sdk/css/cocos-reset.css');
+		}
+		cocosApplicationStyles.push('/sdk/css/cocos-classes.css');
+
+		// Go count arrays for scripts and stylesheets and store them lengths in the
+		// cocosApplicationScriptsToLoad- and cocosApplicationStylesToLoad-counters, so
+		// we'll known how many resources we must load.
+		//
+		cocosApplicationScriptsToLoad = cocosApplicationScripts.length;
+		cocosApplicationStylesToLoad = cocosApplicationStyles.length;
+
+		// Check if any scripts must be loaded
+		//
+		if(cocosApplicationScriptsToLoad > 0)
+		{
+			// Get the head-element
+			//
+			var head = document.getElementsByTagName('head')[0];
+
+			$.each(cocosApplicationScripts, function(k, cocosApplicationScript)
+			{
+				// Check if no script is already found with the same src. If not,
+				// go create the script-element and add insert it onto the head-
+				// element.
+				//
+				if($('script[src^=\''+cocosApplicationScript+'\']').length == 0)
+				{
+					var script = document.createElement('script');
+					script.type = 'text/javascript';
+					script.onload = function()
+					{
+						// When loaded, increase the counter for the
+						// cocosApplicationScriptsLoaded variable and call
+						// the cocosApplicationCheckResources()-method.
+						//
+						cocosApplicationScriptsLoaded++;
+						cocosApplicationCheckResources(cocosApplicationScript);
+					}
+					script.onerror = function()
+					{
+						// Go call the cocosApplicationCheckResources()-
+						// method on error, the second parameter set to true
+						// will indicate something went wrong.
+						//
+						cocosApplicationCheckResources(cocosApplicationScript, true);
+					}
+
+					// Add timestamp to the href in order to prevent caching.
+					//
+					script.src = cocosApplicationScript+'?_t='+$.now();
+					var firstchild = head.childNodes[0];
+					head.insertBefore(script,firstchild);
+				}
+				else
+				{
+					// When already loaded, increase the counter for the
+					// cocosApplicationScriptsLoaded variable and call the
+					// cocosApplicationCheckResources()-method.
+					//
+					cocosApplicationScriptsLoaded++;
+				}
+			});
+		}
+
+		// Check if any stylesheets must be loaded
+		// 
+		if(cocosApplicationStyles.length > 0)
+		{
+			var head = document.getElementsByTagName('head')[0];
+
+			$.each(cocosApplicationStyles, function(k, cocosApplicationStyle)
+			{
+				// Check if no stylesheet is already found with the same href. If
+				// not, go create the link-element and add insert it onto the head-
+				// element.
+				//
+				if($('link[href^=\''+cocosApplicationStyle+'\']').length == 0)
+				{
+					var link = document.createElement('link');
+					link.rel = 'stylesheet';
+					link.onload = function()
+					{
+						// When loaded, increase the counter for the
+						// cocosApplicationStylesLoaded variable and call
+						// the cocosApplicationCheckResources()-method.
+						//
+						cocosApplicationStylesLoaded++;
+						cocosApplicationCheckResources(cocosApplicationStyle);
+					}
+					link.onerror = function()
+					{
+						// Go call the cocosApplicationCheckResources()-
+						// method on error, the second parameter set to true
+						// will indicate something went wrong.
+						//
+						cocosApplicationCheckResources(cocosApplicationStyle, true);
+					}
+
+					// Add timestamp to the href in order to prevent caching.
+					//
+					link.href = cocosApplicationStyle+'?_t='+$.now();
+					var firstchild = head.childNodes[0];
+					head.insertBefore(link,firstchild);
+				}
+				else
+				{
+					// When already loaded, increase the counter for the
+					// cocosApplicationStylesLoaded variable and call the
+					// cocosApplicationCheckResources()-method.
+					//
+					cocosApplicationStylesLoaded++;
+				}
+			});
+		}
+
+		// Call the cocosApplicationCheckResources()-method. When all scripts and
+		// stylesheets are already available, all counters in the variables
+		// cocosApplicationScriptsLoaded and cocosApplicationStylesLoaded will be increased
+		// to match the cocosApplicationScriptsToLoad- and cocosApplicationStylesToLoad-
+		// counters. The cocosApplicationCheckResources will detect everything is loaded and
+		// will continue.
+		//
+		cocosApplicationCheckResources();
+	});
+
+	/**
+	 * This function will be called after scripts and/or stylesheets are loaded or given an
+	 * error. Based on the amount of scripts and/or stylesheets to load and the amount of
+	 * scripts and/or styles actually loaded, we can verify that all resources are available. If
+	 * so, we'll continue by calling the startCoCoSApplication()-method.
+	 * 
+	 * @param      {string}   resourceUrl  The URL of the resource to load
+	 * @param      {boolean}  error        Boolean indicating whether or not the load was
+	 *                                     successful.
+	 */
+	function cocosApplicationCheckResources(resourceUrl, error)
+	{
+		// Check if loading the resources gave an error. If so, show/append the missing URL
+		// to the list of resources.
+		//
+		if(error === true)
+		{	
+			if($('ul#faulyCoCoSApplicationResources').length == 0)
+			{
+				$('body').html('<h1 style=\'margin: 10px\'>Error</h1><br><p style=\'margin: 10px\'>Unable to load applicationResources:<br><ul id=\'faulyCoCoSApplicationResources\'></ul><hr>');
+			}
+			$('ul#faulyCoCoSApplicationResources').append('<li>' + resourceUrl + '</li>');
+
+			// When loading a resource went wrong, we'll set a timeout for 60 seconds.
+			// After this time, the application will reload itself again as long as one
+			// or multiple resources can't be loaded.
+			//
+			setTimeout(function()
+			{
+				window.location.reload();
+			}, 60000);
+		}
+
+		// Otherwise, check if all resources that should be loaded are available. If so, go
+		// call the startCoCoSApplication()-method.
+		else
+		{
+			if((cocosApplicationScriptsLoaded >= cocosApplicationScriptsToLoad) && (cocosApplicationStylesLoaded >= cocosApplicationStylesToLoad))
+			{
+				startCoCoSApplication();
+			}
+		}
+	}
+
+	/**
+	 * Starts the CoCoS Application.
 	 */
 	function startCoCoSApplication(withDebugConsole)
 	{
+		// Check if the debug-parameter in the URL is set to 'trace' or 'true' or the
+		// cocosApplicationUseDebugConsole()-method, based on a constant/define, tells us
+		// to use the debugConsole.
+		//
 		if(((getRequestParameter('debug') == 'trace') || (getRequestParameter('debug') == 'true')) || isTrue(cocosApplicationUseDebugConsole()))
 		{
+			// Go enable the debugConsole. Use the result from the method
+			// cocosApplicationHideDebugConsole() to indicate whether or not the
+			// debugConsole should be hidden.
+			// 
 			enableDebugConsole(cocosApplicationHideDebugConsole());
 			logToConsole('Console debug enabled');
 		}	
@@ -260,13 +499,13 @@ else
 
 		app = new cocosApplication
 		(
-		 	function(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData)
+		 	function(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData, topologyData)
 			{
 				setTimeout
 				(
 					function()
 					{
-						cocosApplicationSuccesfullyLoaded(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData)
+						cocosApplicationSuccesfullyLoaded(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData, topologyData)
 					},
 					1
 				);
@@ -299,11 +538,11 @@ else
 	 * @param      {string}  isDeviceActive  Indicates if device active
 	 * @param      {<type>}  deviceData      The device data
 	 */
-	function cocosApplicationSuccesfullyLoaded(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData)
+	function cocosApplicationSuccesfullyLoaded(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData, topologyData)
 	{
 		var applicationTitle = app.getConfigVar('title');
 
-		if(!isEmpty(applicationTitle))
+		if(!isEmpty(applicationTitle) && !isNull(applicationTitle))
 		{
 			document.title = applicationTitle;
 		}
@@ -311,16 +550,16 @@ else
 		var faviconRel = 'icon';
 		var faviconType = 'image/x-icon';
 
-		if($("head").find("link[rel='"+faviconRel+"']").length == 0)
+		if($('head').find('link[rel=\''+faviconRel+'\']').length == 0)
 		{
-			$("head").append("<link  rel='"+faviconRel+"' type='"+faviconType+"' href='"+app.getFaviconSrc()+"' />");
+			$('head').append('<link rel=\''+faviconRel+'\' type=\''+faviconType+'\' href=\''+app.getFaviconSrc()+'\' />');
 		}
 		
 		if(!isTrue(isDevice) || (isTrue(isDevice) && isTrue(isDeviceActive)))
 		{
 			if(isTrue(isAuthorized))
 			{
-				logSuccessToConsole('Successfully initialized application, go find appIsReadyToGo-function!', DEBUG_ORIGIN_APPLICATION_SDK);
+				logToConsole('Successfully initialized application, go find appIsReadyToGo-function!', DEBUG_ORIGIN_APPLICATION_SDK);
 
 				if(typeof(appIsReadyToGo) === 'function')
 				{	
@@ -330,14 +569,14 @@ else
 						app.isReady();
 					}
 					
-					logToConsole('appIsReadyToGo-function found', DEBUG_ORIGIN_APPLICATION_SDK);	
-					appIsReadyToGo(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData);
+					logSuccessToConsole('appIsReadyToGo-function found, calling it.', DEBUG_ORIGIN_APPLICATION_SDK);	
+					appIsReadyToGo(isAuthorized, isLoggedIn, userData, deviceData, topologyData);
 
 					if(isTrue(isAuthorized))
 					{
 						// Added: Log info to API.
 						//
-						logInfo('Application loaded and started successfully. ('+app.getVersions(true)+')', DEBUG_ORIGIN_APPLICATION_SDK, true, true);
+						logInfo('Application loaded and started successfully. ('+app.getVersions(true)+')', DEBUG_ORIGIN_APPLICATION_SDK, true, cocosApplicationLogWelcomeMessageToApi());
 					}
 				}
 				else
@@ -358,14 +597,14 @@ else
 						app.isReady();
 					}
 					
-					logToConsole('appIsReadyToLogin-function found', DEBUG_ORIGIN_APPLICATION_SDK);	
-					appIsReadyToLogin(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData);
+					logSuccessToConsole('appIsReadyToLogin-function found, calling it.', DEBUG_ORIGIN_APPLICATION_SDK);	
+					appIsReadyToLogin(isAuthorized, isLoggedIn, userData, deviceData, topologyData);
 
 					if(isTrue(isAuthorized))
 					{
 						// Added: Log info to API.
 						//
-						logInfo('Application loaded, ready for login. ('+app.getVersions(true)+')', DEBUG_ORIGIN_APPLICATION_SDK, true, true);
+						logInfo('Application loaded, ready for login. ('+app.getVersions(true)+')', DEBUG_ORIGIN_APPLICATION_SDK, true, cocosApplicationLogWelcomeMessageToApi());
 					}
 				}
 				else if(typeof(appIsReadyToGo) === 'function')
@@ -376,14 +615,14 @@ else
 						app.isReady();
 					}
 					
-					logToConsole('appIsReadyToGo-function found', DEBUG_ORIGIN_APPLICATION_SDK);	
-					appIsReadyToGo(isAuthorized, isLoggedIn, userData, isDevice, isDeviceActive, deviceData);
+					logSuccessToConsole('appIsReadyToGo-function found, calling it.', DEBUG_ORIGIN_APPLICATION_SDK);
+					appIsReadyToGo(isAuthorized, isLoggedIn, userData, deviceData, topologyData);
 
 					if(isTrue(isAuthorized))
 					{
 						// Added: Log info to API.
 						//
-						logInfo('Application loaded and started successfully. ('+app.getVersions(true)+')', DEBUG_ORIGIN_APPLICATION_SDK, true, true);
+						logInfo('Application loaded and started successfully. ('+app.getVersions(true)+')', DEBUG_ORIGIN_APPLICATION_SDK, true, cocosApplicationLogWelcomeMessageToApi());
 					}
 				}
 				else
@@ -401,126 +640,6 @@ else
 			app.enableReloadWhenDeviceActivates();
 		}
 	}
-
-	/**
-	 * { function_description }
-	 *
-	 * @param      {string}   resourceUrl  The resource url
-	 * @param      {boolean}  error        The error
-	 */
-	function cocosApplicationCheckResources(resourceUrl, error)
-	{
-		if(error === true)
-		{	
-			if($('ul#faulyCoCoSApplicationResources').length == 0)
-			{
-				$('body').html('<h1 style=\'margin: 10px\'>Error</h1><br><p style=\'margin: 10px\'>Unable to load applicationResources:<br><ul id=\'faulyCoCoSApplicationResources\'></ul><hr>');
-			}
-			$('ul#faulyCoCoSApplicationResources').append('<li>' + resourceUrl + '</li>');
-
-			setTimeout(function()
-			{
-				window.location.reload();
-			}, 60000);
-		}
-		else
-		{
-			if((cocosApplicationScriptsLoaded >= cocosApplicationScriptsToLoad) && (cocosApplicationStylesLoaded >= cocosApplicationStylesToLoad))
-			{
-				startCoCoSApplication();
-			}
-		}
-	}
-
-	$(window).on('load', function()
-	{
-		// Go create array for scripts
-		//
-		var cocosApplicationScripts = [];
-		cocosApplicationScripts.push('/sdk/js/cocos-javascript-functions.js');
-		cocosApplicationScripts.push('/sdk/js/cocos-jquery-functions.js');
-		cocosApplicationScripts.push('/sdk/js/cocos-api-sdk.js');
-
-		// Go create array for styles
-		//
-		var cocosApplicationStyles = [];
-		if(cocosApplicationUseResetCss())
-		{
-			cocosApplicationStyles.push('/sdk/css/cocos-reset.css');
-		}
-		cocosApplicationStyles.push('/sdk/css/cocos-classes.css');
-
-		// Go count arrays for scripts and styles
-		//
-		cocosApplicationScriptsToLoad = cocosApplicationScripts.length;
-		cocosApplicationStylesToLoad = cocosApplicationStyles.length;
-
-		if(cocosApplicationScriptsToLoad > 0)
-		{
-			var head = document.getElementsByTagName('head')[0];
-
-			$.each(cocosApplicationScripts, function(k, cocosApplicationScript)
-			{
-				if($('script[src^=\''+cocosApplicationScript+'\']').length == 0)
-				{
-					var script = document.createElement('script');
-					script.type = 'text/javascript';
-					script.onload = function()
-					{
-						cocosApplicationScriptsLoaded++;
-						cocosApplicationCheckResources(cocosApplicationScript);
-					}
-					script.onerror = function()
-					{
-						cocosApplicationCheckResources(cocosApplicationScript, true);
-					}
-					script.src = cocosApplicationScript+'?_t='+$.now();
-
-					var firstchild = head.childNodes[0];
-					head.insertBefore(script,firstchild);
-				}
-				else
-				{
-					cocosApplicationScriptsLoaded++;
-				}
-			});
-		}
-
-		if(cocosApplicationStyles.length > 0)
-		{
-			var head = document.getElementsByTagName('head')[0];
-
-			$.each(cocosApplicationStyles, function(k, cocosApplicationStyle)
-			{
-				if($('link[href^=\''+cocosApplicationStyle+'\']').length == 0)
-				{
-					var link = document.createElement('link');
-					link.rel = 'stylesheet';
-					link.onload = function()
-					{
-						cocosApplicationStylesLoaded++;
-						cocosApplicationCheckResources(cocosApplicationStyle);
-					}
-					link.onerror = function()
-					{
-						cocosApplicationStylesLoaded++;
-						cocosApplicationCheckResources(cocosApplicationStyle, true);
-					}
-
-					link.href = cocosApplicationStyle+'?_t='+$.now();
-
-					var firstchild = head.childNodes[0];
-					head.insertBefore(link,firstchild);
-				}
-				else
-				{
-					cocosApplicationStylesLoaded++;
-				}
-			});
-		}
-
-		cocosApplicationCheckResources();
-	});
 
 	/**
 	 * { function_description }
@@ -580,6 +699,11 @@ else
 	function cocosApplicationHideDebugConsole()
 	{
 		return ((typeof(COCOS_APPLICATION_DEBUG_CONSOLE) != 'undefined') && ((COCOS_APPLICATION_DEBUG_CONSOLE === 'hidden') || (COCOS_APPLICATION_DEBUG_CONSOLE === 'hide')));
+	}
+
+	function cocosApplicationLogWelcomeMessageToApi()
+	{
+		return ((typeof(COCOS_APPLICATION_LOG_WELCOME_TO_API) == 'undefined') || (COCOS_APPLICATION_LOG_WELCOME_TO_API === true));
 	}
 
 	/**
@@ -1246,9 +1370,9 @@ var _logToConsole = function(message, origin, type, comments)
 			+ '</p>');
 
 		// Go remove last row
-		if ($('body').find('#contentCoCoSDebugConsole').find("p").length > 250)
+		if ($('body').find('#contentCoCoSDebugConsole').find('p').length > 250)
 		{
-			$('body').find('#contentCoCoSDebugConsole').find("p:last-child").remove();
+			$('body').find('#contentCoCoSDebugConsole').find('p:last-child').remove();
 		}
 
 		//
@@ -1312,10 +1436,22 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	var _applicationTextlib = {};
 	var _applicationTextlibIds = {};
 
+	var _defaultTextlib = {
+		"selectLocationText": {
+			"NL": "Selecteer een locatie",
+			"EN": "Select a location",
+		},
+		"noLocationText": {
+			"NL": "Doorgaan zonder locatie",
+			"EN": "Continue without a location",
+		}
+	};
+	_defaultTextlib = lowercaseObjectKeys(_defaultTextlib);
+
 	var _applicationDeviceData = {};
 	var _applicationDeviceTags = {};
 
-	var _applicationLanguage = 'NL';
+	var _applicationLanguage = getBrowserLanguage();
 	var _applicationLanguages = {};
 
 	var _applicationStarted = false;
@@ -1377,6 +1513,12 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		_applicationReloadWhenDeviceActivates = true;
 	}
 
+	/**
+	 * @brief      { function_description }
+	 * @param      comments          { parameter_description }
+	 * @param      callbackSuccess   { parameter_description }
+	 * @param      callbackFunction  { parameter_description }
+	 * @return     { description_of_the_return_value } */
 	this.reportConsoleLogs = function(comments, callbackSuccess, callbackFunction)
 	{
 		var title = 'Log report, sent from CoCoS frontend application';
@@ -1867,24 +2009,24 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 
 		if(isset(selector))
 		{
-			textlibElements = selector.find("[data-textlib]");
+			textlibElements = selector.find('[data-textlib]');
 		}
 		else
 		{
-			textlibElements = $("[data-textlib]");
+			textlibElements = $('[data-textlib]');
 		}
 
 		$.each(textlibElements, function(k, obj)
 		{
 			var text = null;
 
-			if(!isset($(obj).attr("data-textlibid")))
+			if(!isset($(obj).attr('data-textlibid')))
 			{
-				text = this.getTextFromLib($(obj).attr("data-textlib"));	
+				text = this.getTextFromLib($(obj).attr('data-textlib'));	
 			}
 			else
 			{
-				text = this.getTextFromIdentifier($(obj).attr("data-textlibid"), $(obj).attr("data-textlib"));
+				text = this.getTextFromIdentifier($(obj).attr('data-textlibid'), $(obj).attr('data-textlib'));
 			}
 
 			if(isNull(text) || isEmpty(text))
@@ -1908,7 +2050,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				// When object hasn't attribute telling HTML is allowed, go strip the text
 				// to prevent ? ..
 				// 
-				if(!isTrue($(obj).attr("data-textlibHtml")))
+				if(!isTrue($(obj).attr('data-textlibHtml')))
 				{
 					text = escapeHtml(text);
 				}
@@ -1973,7 +2115,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 
 		if(isset(_applicationTextlib[tag]))
 		{
-			if(languageCode == "*")
+			if(languageCode == '*')
 			{
 				return _applicationTextlib[tag];
 			}
@@ -2009,6 +2151,45 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				}
 			}
 		}
+		else if(isset(_defaultTextlib[tag]))
+		{
+			if(languageCode == '*')
+			{
+				return _defaultTextlib[tag];
+			}
+			else
+			{
+				if(isset(_defaultTextlib[tag][languageCode]))
+				{
+					if(isset(_defaultTextlib[tag][languageCode]))
+					{
+						text = _defaultTextlib[tag][languageCode];
+					}
+				}
+
+				// Only fallback to another language when the text is fetched
+				// without a identifier. When a specific text in a specific language
+				// for a specific item (identifier) is fetched, only that text can
+				// be returned. When not found, it will return empty.
+				// 
+				// When a text for a language is required without identifier, so
+				// just a 'global' text. We will try to always return a value, even
+				// if this means a other language will be returned.
+				//
+				if(isNull(text) && (objectSize(_defaultTextlib[tag]) > 0))
+				{
+					// When no text found for the desired language,
+					// go check for some other...
+					//
+					languageCode = Object.keys(_defaultTextlib[tag])[0];
+					if(isset(_defaultTextlib[tag][languageCode]))
+					{
+						text = _defaultTextlib[tag][languageCode];
+					}
+				}
+			}
+		}
+
 		if(isString(text))
 		{
 			if(isObject(params) && (objectSize(params) > 0))
@@ -2041,6 +2222,165 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	{
 		return _applicationTextlib;
 	}
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  username          The username
+	 * @param      {<type>}  password          The password
+	 * @param      {<type>}  successFunction   The success function
+	 * @param      {<type>}  errorFunction     The error function
+	 * @param      {<type>}  completeFunction  The complete function
+	 */
+	this.handleLoginWithUserNamePassword = function(username, password, successFunction, errorFunction, completeFunction)
+	{
+		apiConnector.handleLoginWithUserNamePassword(username, password, function(isLoggedIn, userData, response)
+		{
+			_handleLoginResponse(isLoggedIn, userData, response, successFunction, errorFunction, completeFunction)
+		});
+	};
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  pincode           The pincode
+	 * @param      {<type>}  successFunction   The success function
+	 * @param      {<type>}  errorFunction     The error function
+	 * @param      {<type>}  completeFunction  The complete function
+	 */
+	this.handleLoginWithPincode = function(pincode, successFunction, errorFunction, completeFunction)
+	{
+		apiConnector.handleLoginWithPincode(pincode, function(isLoggedIn, userData, response)
+		{
+			_handleLoginResponse(isLoggedIn, userData, response, successFunction, errorFunction, completeFunction)
+		});
+	};
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  username          The username
+	 * @param      {<type>}  password          The password
+	 * @param      {<type>}  pincode           The pincode
+	 * @param      {<type>}  successFunction   The success function
+	 * @param      {<type>}  errorFunction     The error function
+	 * @param      {<type>}  completeFunction  The complete function
+	 */
+	this.handleLoginWithUserNamePasswordPincode = function(username, password, pincode, successFunction, errorFunction, completeFunction)
+	{
+		apiConnector.handleLoginWithUserNamePasswordPincode(username, password, pincode, function(isLoggedIn, userData, response)
+		{
+			_handleLoginResponse(isLoggedIn, userData, response, successFunction, errorFunction, completeFunction)
+		});
+	};
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  token             The token
+	 * @param      {<type>}  successFunction   The success function
+	 * @param      {<type>}  errorFunction     The error function
+	 * @param      {<type>}  completeFunction  The complete function
+	 */
+	this.handleLoginWithToken = function(token, successFunction, errorFunction, completeFunction)
+	{
+		apiConnector.handleLoginWithToken(token, function(isLoggedIn, userData, response)
+		{
+			_handleLoginResponse(isLoggedIn, userData, response, successFunction, errorFunction, completeFunction)
+		});
+	};
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}    loggedIn          The logged in
+	 * @param      {<type>}    userData          The user data
+	 * @param      {<type>}    response          The response
+	 * @param      {Function}  successFunction   The success function
+	 * @param      {Function}  errorFunction     The error function
+	 * @param      {Function}  completeFunction  The complete function
+	 */
+	_handleLoginResponse = function(isLoggedIn, userData, response, successFunction, errorFunction, completeFunction)
+	{
+		if(isFunction(successFunction) && !isset(errorFunction) && !isset(completeFunction))
+		{
+			if(isTrue(isLoggedIn))
+			{
+				var availableLocations = extract(userData, 'locations');
+				if(isObject(availableLocations))
+				{
+					_handleLocationResponse(availableLocations, function()
+					{
+						successFunction(true, userData, response);
+					});
+				}
+				else
+				{
+					successFunction(true, userData, response);
+				}
+			}
+			else
+			{
+				successFunction(false, userData, response);
+			}
+		}
+		else
+		{
+			if(isTrue(isLoggedIn))
+			{
+				var availableLocations = extract(userData, 'locations');
+				if(isObject(availableLocations))
+				{
+					_handleLocationResponse(availableLocations, function()
+					{
+						if(isFunction(successFunction))
+						{
+							successFunction(response);
+						}
+	
+						if(isFunction(completeFunction))
+						{
+							completeFunction();
+						}
+					});
+				}
+				else
+				{
+					if(isFunction(successFunction))
+					{
+						successFunction(response);
+					}
+		
+					if(isFunction(completeFunction))
+					{
+						completeFunction();
+					}
+				}
+			}
+			else
+			{
+				if(isFunction(errorFunction))
+				{
+					errorFunction(null, response);
+				}
+			}
+		}
+	};
+
+	/**
+	 * Gets the topology identifier.
+	 *
+	 * @return     {<type>}  The topology identifier.
+	 */
+	this.getDeviceId = function()
+	{
+		return apiConnector.getDeviceId();
+	};
+
+	this.getDeviceName = function()
+	{
+		return apiConnector.getDeviceName();
+	};
 
 	/**
 	 * Gets the device data.
@@ -2168,7 +2508,397 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		}
 
 		return null;
+	};
+
+	/**
+	 * Gets the topology identifier.
+	 *
+	 * @return     {<type>}  The topology identifier.
+	 */
+	this.getTopologyId = function()
+	{
+		return apiConnector.getTopologyId();
 	}
+
+	/**
+	 * Gets the topology name.
+	 *
+	 * @return     {<type>}  The topology name.
+	 */
+	this.getTopologyName = function()
+	{
+		return apiConnector.getTopologyName();
+	}
+
+	var _availableLocations = null;
+
+	/**
+	 * Adds location options.
+	 *
+	 * @param      {Function}  selectElement       The select element
+	 * @param      {string}    selectLocationText  The select location text
+	 * @param      {string}    noLocationText      No location text
+	 */
+	this.addLocationOptions = function(selectElement, selectLocationText, noLocationText)
+	{
+		if(isString(selectElement))
+		{
+			selectElement = $(selectElement);
+		}
+
+		if((selectElement.length == 1) && (selectElement.get(0).tagName.toLowerCase() == 'select'))
+		{
+			logToConsole('Creating select-element with available locations/topology from the CoCoS API.', DEBUG_ORIGIN_APPLICATION_SDK);
+			
+			this.getAvailableLocations(function(availableLocations)
+			{
+				if(availableLocations.length > 0)
+				{
+					// Remove all options
+					//
+					$(selectElement).find('option').remove();
+
+					// Check if _applicationTopologyId is set to -1 (public). If so, add an
+					// empty option for selecting no location.
+					// 
+					if(_applicationTopologyId == -1)
+					{
+						if(!isset(noLocationText) || isEmpty(noLocationText))
+						{
+							noLocationText = this.getTextFromLib('noLocationText', [], null, '');
+						}
+						$(selectElement).append('<option value=\'-1\'>'+noLocationText+'</option>');
+					}
+					else
+					{
+						if(!isset(selectLocationText) || isEmpty(selectLocationText))
+						{
+							selectLocationText = this.getTextFromLib('selectLocationText', [], null, '');
+						}
+						$(selectElement).append('<option value=\'\' disabled>'+selectLocationText+'</option>');
+					}
+
+					$.each(availableLocations, function(k, location)
+					{
+						$(selectElement).append('<option value=\''+location.id+'\'>'+location.name+'</option>');
+					});
+
+					var locationCookie = apiConnector.getLocationCookie();
+					if(!isEmpty(locationCookie))
+					{
+						if($(selectElement).find('option[value=\''+locationCookie+'\']').length > 0)
+						{
+							$(selectElement).find('option[value=\''+locationCookie+'\']').attr('selected', true);
+							logInfoToConsole('Pre-selected locations/topology \'' + $(selectElement).find('option[value=\''+locationCookie+'\']').text() + '\' based on preferences from cookie.', DEBUG_ORIGIN_APPLICATION_SDK);
+						}
+					}
+					else if(availableLocations.length == 1)
+					{
+						var onlyLocationId = extract(availableLocations, 0, 'id');
+						if($(selectElement).find('option[value=\''+onlyLocationId+'\']').length > 0)
+						{
+							$(selectElement).find('option[value=\''+onlyLocationId+'\']').attr('selected', true);
+							logInfoToConsole('Pre-selected locations/topology \'' + $(selectElement).find('option[value=\''+onlyLocationId+'\']').text() + '\', because only option available.', DEBUG_ORIGIN_APPLICATION_SDK);
+						}
+					}
+					else
+					{
+						$(selectElement).find('option[value=\'\']').attr('selected', true);
+					}
+				}
+				else
+				{
+					// TODO: What here?
+				}
+			}.bind(this));
+		}
+	}
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {Function}  callbackFunction  The callback function
+	 */
+	this.getAvailableLocations = function(callbackFunction)
+	{
+		logMessageToConsole('Start getting available locations/topology...', DEBUG_ORIGIN_APPLICATION_SDK);
+
+		var topologyId = this.getTopologyId();
+		var topologyName = this.getTopologyName();
+
+
+		// When the topologyId AND the topologyName both are null (based on the values in
+		// the payload of the JWT/AccessToken), using locations isn't supported by the CoCoS
+		// API.
+		// 
+		if(isNull(topologyId) && isNull(topologyName))
+		{
+			logInfoToConsole('Locations/topology not available from CoCoS API, continue without.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+			// Locations/topology not available. When a callbackFunction is provided, go
+			// execute it with an empty array.
+			//
+			if(isFunction(callbackFunction))
+			{
+				callbackFunction([]);
+			}
+		}
+		else
+		{	
+			// When locations is/are available, go check if a location isn't set yet.
+			// This will be the case when the value for the topologyId isn't empty and
+			// is set to 0 (required) or -1 (optional). In the case of value -1, the
+			// name should also be empty. When the topologyId is -1, but we also have a
+			// topologyName, this will mean -1 is chosen. In case of an empty name, a
+			// location should be chosen in order to continue.
+			//
+			if( !isEmpty(topologyId) && ( ((topologyId == -1) && isEmpty(topologyName)) || (topologyId == 0) ) )
+			{
+				// Check if the _availableLocations-variable is null. If so, this
+				// means no locations are fetched from the CoCOS API yet. So we must
+				// get them.
+				// 
+				if(isNull(_availableLocations))
+				{
+					//
+					logMessageToConsole('Go fetch available locations/topology from CoCoS API.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+					// Get from CoCoS
+					//
+					_getAvailableLocationsFromCoCoS(callbackFunction);
+				}
+
+				// Otherwise, we've already got a list of availableLocations, so no
+				// extra request should be executed. We can just return the list of
+				// locations.
+				//
+				else
+				{
+					logMessageToConsole('Returning available locations/topology from local cache.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+					if(isFunction(callbackFunction))
+					{
+						callbackFunction(_availableLocations);
+					}
+				}
+			}
+
+			// In all other cases, a location is already chosen. So selecting a location
+			// isn't required anymore.  When a callbackFunction is provided, go execute
+			// it with an empty array.
+			//
+			else
+			{
+				logInfoToConsole('Locations/topology detected by CoCoS API, continue using location \'' + topologyName + '\.', DEBUG_ORIGIN_APPLICATION_SDK);
+	
+				// Set available locations to an empty array because no
+				// selection must/can be made.
+				//
+				if(isFunction(callbackFunction))
+				{
+					callbackFunction([]);
+				}
+			}
+		}
+	};
+
+	var _getAvailableLocationsFromCoCoS = function(callbackFunction)
+	{
+		apiConnector.read(
+			'topology',
+			'locations',
+			null,
+			null,
+			null,
+			null,
+			function(response, xhr)
+			{
+				//
+				_handleLocationResponse(response, callbackFunction);
+				
+			}.bind(this),
+			function(error, response, xhr)
+			{
+				// When we've got a 403-statusCode (Forbidden), this
+				// means we don't have permissions to read the
+				// locations from the CoCoS API. 
+				//
+				if(xhr.getHttpStatusCode() == 403)
+				{
+					// However, if the topologyId is set to -1,
+					// this means a location is optional, not
+					// required. So instead of throwing an 
+					// error, we'll automatically choose -1 as
+					// the location for this user/session,
+					// sending it to the CoCoS API and (on
+					// success) return/confirm our location will
+					// be -1 (public/no location).
+					// 
+					if(topologyId == -1)
+					{
+						logWarningToConsole('Unable to get locations/topology from CoCoS API (not allowed), continue selecting the \'no-location\' with id \'-1\'.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+						// No permissions for a location...
+						//
+						_setLocation(-1, function(response, xhr)
+						{
+							logSuccessToConsole('Successfully selected location with id \''+onlyLocationId+'\', we\'re now at \'' + this.getTopologyName() + '\'.', DEBUG_ORIGIN_APPLICATION_SDK);
+							
+							// Set available locations to an empty array
+							// because no selection must/can be made.
+							//
+							_availableLocations = [];
+							if(isFunction(callbackFunction))
+							{
+								callbackFunction(_availableLocations);
+							}
+
+						}, function(error, response, xhr)
+						{
+							// TODO: What here?
+							//
+
+						}, null, false);
+					}
+					// Otherwise, when not -1, a location will
+					// be required, but none can be selected. So
+					// we'll exit here.
+					// 
+					else
+					{
+						logErrorToConsole('Error fetching locations/topology from the CoCoS API, but required by the apiKey. Can\t continue.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+						// Show error/overlay about missing topology
+						//
+						showMissingTopology();
+						return;
+					}
+				}
+				else
+				{
+					// Otherwise, in case of other statusCodes
+					// TODO: What here?
+					//
+				}
+
+			}
+		);
+	};
+
+	var _handleLocationResponse = function(response, callbackFunction)
+	{
+		var topologyId = this.getTopologyId();
+
+		// Set available locations to be an empty array...
+		//
+		_availableLocations = [];
+
+		//
+		$.each(extract(response, 'data'), function(k, location)
+		{
+			_availableLocations.push(extract(location, 'data'));
+		});
+
+		// No topologyId selected/available. Value 0 indicates a
+		// location is required, so go check if any locations are
+		// available. Otherwise, exit here.
+		// 
+		if((topologyId == 0) && (_availableLocations.length == 0))
+		{
+			logErrorToConsole('No locations/topology fetched from the CoCoS API, but required by the apiKey. Can\'t continue.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+			// Show error/overlay about missing topology
+			//
+			showMissingTopology();
+			return;
+		}
+		// When a location is required (topologyId == 0) and we've
+		// got only 1 location, automatically choose the one and
+		// only available location.
+		// 
+		else if((topologyId == 0) && (_availableLocations.length == 1))
+		{
+			var onlyLocationId = extract(_availableLocations, 0, 'id');
+			var onlyLocationName = extract(_availableLocations, 0, 'name');
+
+			logMessageToConsole('Only 1 available location/topology found and the \'no-location\' option isn\'t allowed. Continue selecting location with id \''+onlyLocationId+'\'.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+			_setLocation(onlyLocationId, function(response, xhr)
+			{
+				logSuccessToConsole('Successfully selected location with id \''+onlyLocationId+'\', we\'re now at \'' + onlyLocationName + '\'.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+				_availableLocations = [];
+				if(isFunction(callbackFunction))
+				{
+					callbackFunction(_availableLocations);
+				}
+
+			}, function(error, response, xhr)
+			{
+				// TODO: What here?
+				//
+				if(isFunction(callbackFunction))
+				{
+					callbackFunction(_availableLocations);
+				}
+
+			}, null, false);
+		}
+		else
+		{
+			logMessageToConsole('Found '+_availableLocations.length+' locations/topology, a location must be selected in order to continue...', DEBUG_ORIGIN_APPLICATION_SDK);
+			if(isFunction(callbackFunction))
+			{
+				callbackFunction(_availableLocations);
+			}
+		}
+	}.bind(this);
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  idTopology       The identifier topology
+	 * @param      {<type>}  callbackSuccess  The callback success
+	 * @param      {<type>}  callbackError    The callback error
+	 */
+	this.iamHere = function(idTopology, callbackSuccess, callbackError, callbackComplete, saveLocationCookie)
+	{
+		apiConnector.handleLocation(idTopology, function(locationSuccess, error, response, xhr)
+		{
+			if(isTrue(locationSuccess))
+			{
+				if(isFunction(callbackSuccess))
+				{
+					callbackSuccess(response, xhr);
+				}
+			}
+			else
+			{
+				if(isFunction(callbackError))
+				{
+					callbackError(error, response, xhr);
+				}
+			}
+
+			if(isFunction(callbackComplete))
+			{
+				callbackComplete(response, xhr);
+			}
+
+		}, saveLocationCookie);
+	}
+
+		/**
+		 * Sets the location.
+		 *
+		 * @param      {<type>}  idTopology       The identifier topology
+		 * @param      {<type>}  callbackSuccess  The callback success
+		 * @param      {<type>}  callbackError    The callback error
+		 */
+		var _setLocation = function(idTopology, callbackSuccess, callbackError, callbackComplete, saveLocationCookie)
+		{
+			this.iamHere(idTopology, callbackSuccess, callbackError, callbackComplete, saveLocationCookie);
+		}.bind(this);
 
 	/**
 	 * Adds an application language.
@@ -2371,6 +3101,23 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	}
 
 	/**
+ 	 * { item_description }
+ 	 */	
+	var _setDeviceId = function(idDevice)
+	{
+		_applicationDeviceId = idDevice;
+	}
+
+	/**
+	 * @brief      { function_description }
+	 * @param      idTopology  { parameter_description }
+	 * @return     { description_of_the_return_value } */
+	var _setTopologyId = function(idTopology)
+	{
+		_applicationTopologyId = idTopology;
+	}
+
+	/**
 	 * Adds a device tag.
 	 *
 	 * @param      {string}  id        The identifier
@@ -2445,6 +3192,23 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	}
 
 	/**
+	 * Starts a loading.
+	 *
+	 * @param      {<type>}  title    The title
+	 * @param      {<type>}  message  The message
+	 * @param      {number}  delay    The delay
+	 */
+	this.startLoading = function(title, message, delay)
+	{
+		if(!isset(delay) || !isNumeric(delay))
+		{
+			delay = 0;
+		}
+
+		this.showLoading(title, message, delay);
+	}
+
+	/**
 	 * Shows the loading.
 	 *
 	 * @param      {string}  title    The title
@@ -2479,10 +3243,10 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				message = 'Een ogenblik geduld aub';
 			}
 
-			var loadingId = "cocosApplicationIsLoading";
-			if($("body").find("#"+loadingId).length < 1)
+			var loadingId = 'cocosApplicationIsLoading';
+			if($('body').find('#'+loadingId).length < 1)
 			{
-				$("body").append
+				$('body').append
 				(
 				 	'<div id=\''+loadingId+'\' style=\'display: none; position: absolute; top: 0px; left: 0px; z-index: 99997; width: 100%; height: 100%; background-color: '+_defaultOverlayBackgroundColor+';\'>'
 						+ ' <div style=\'width: 80%; height: 30vmin; position: absolute; left: 10%; top: 50%; margin-top: -13vmin; text-align: center;\'>'
@@ -2498,20 +3262,28 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			}
 			else
 			{
-				$("body").find("#"+loadingId).find('[data-use=\'loadingTitle\']').text(title);
-				$("body").find("#"+loadingId).find('[data-use=\'loadingMessage\']').text(message);
+				$('body').find('#'+loadingId).find('[data-use=\'loadingTitle\']').text(title);
+				$('body').find('#'+loadingId).find('[data-use=\'loadingMessage\']').text(message);
 			}
 
-			if($("head").find('style[data-use=\'cocosApplicationLoader\']').length < 1)
+			if($('head').find('style[data-use=\'cocosApplicationLoader\']').length < 1)
 			{
-				$("head").prepend(
+				$('head').prepend(
 					'<style type=\'text/css\' data-use=\'cocosApplicationLoader\'>'
 					+ _loadingCss
 					+ '</style>'
 				);
 			}
 
-			$("body").find("#"+loadingId).fadeIn();
+			if(delay > 0)
+			{
+				$('body').find('#'+loadingId).fadeIn();
+			}
+			else
+			{
+				$('body').find('#'+loadingId).show();
+			}
+
 		}.bind(this), delay);
 	};
 
@@ -2560,14 +3332,22 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	}
 
 	/**
+	 * Stops a loading.
+	 */
+	this.stopLoading = function()
+	{
+		this.hideLoading();
+	}
+
+	/**
 	 * Hides the loading.
 	 */
 	this.hideLoading = function()
 	{
 		myClearTimeout(_applicationLoaderTimeout);
 
-		var loadingId = "cocosApplicationIsLoading";
-		$("body").find("#"+loadingId).stop().hide();
+		var loadingId = 'cocosApplicationIsLoading';
+		$('body').find('#'+loadingId).stop().hide();
 	}
 
 	// Deprecated function, but still here to be backwards-compatible.
@@ -2602,6 +3382,36 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		_showOutOfUse(title, message, true);
 	}
 
+	var showMissingDevice = function(title, message)
+	{
+		if(isEmpty(title))
+		{
+			title = 'Apparaat niet herkend/beschikbaar.';
+		}
+
+		if(isEmpty(message))
+		{
+			message = 'Neem contact op met uw (applicatie)beheerder.';
+		}
+
+		_showOutOfUse(title, message);
+	}
+
+	var showMissingTopology = function(title, message)
+	{
+		if(isEmpty(title))
+		{
+			title = 'Werkplek of locatie niet herkend/beschikbaar.';
+		}
+
+		if(isEmpty(message))
+		{
+			message = 'Neem contact op met uw (applicatie)beheerder.';
+		}
+
+		_showOutOfUse(title, message);
+	}
+
 	/**
 	 * Shows the out of use.
 	 *
@@ -2623,9 +3433,9 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		}
 
 		var outOfUseId = 'cocosApplication__OutOfUse';
-		if($("body").find("#"+outOfUseId).length < 1)
+		if($('body').find('#'+outOfUseId).length < 1)
 		{
-			$("body").append(
+			$('body').append(
 			 	'<div id=\''+outOfUseId+'\' style=\'display: none; position: absolute; top: 0px; left: 0px; z-index: 88888; width: 100%; height: 100%; background-color: '+_defaultOverlayBackgroundColor+'\'>'
 					+ ' <div style=\'width: 80%; height: 12vmin; position: absolute; left: 10%; top: 50%; margin-top: -6vmin; text-align: center;\'>'
 						+ ' <font style=\'color: '+_defaultFontColor+'; line-height: 7vmin; font-size: 4vmin; font-family: '+_defaultFontFamily+'\'>'+title+'</font><br>'
@@ -2673,9 +3483,9 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			}
 
 			var invalidSizeId = 'cocosApplication__InvalidSize';
-			if($("body").find("#"+invalidSizeId).length < 1)
+			if($('body').find('#'+invalidSizeId).length < 1)
 			{
-				$("body").append(
+				$('body').append(
 				 	'<div id=\''+invalidSizeId+'\' style=\'position: absolute; top: 0px; left: 0px; z-index: 88888; width: 100%; height: 100%; background-color: '+_defaultOverlayBackgroundColor+'\'>'
 						+ ' <div style=\'width: 80%; height: 12vmin; position: absolute; left: 10%; top: 50%; margin-top: -6vmin; text-align: center;\'>'
 							+ ' <font style=\'color: '+_defaultFontColor+'; line-height: 7vmin; font-size: 4vmin; font-family: '+_defaultFontFamily+'\'>'+title+'</font><br>'
@@ -2726,8 +3536,8 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	{
 		this.heartbeat();
 
-		var outOfUseId = "cocosApplication__OutOfUse";
-		$("body").find("#"+outOfUseId).hide();
+		var outOfUseId = 'cocosApplication__OutOfUse';
+		$('body').find('#'+outOfUseId).hide();
 
 		if(isTrue(reportRunning))
 		{
@@ -2740,16 +3550,16 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	 */
 	this.blockUserInput = function()
 	{
-		var userBlockId = "cocosApplication__UserBlock";
-		if($("body").find("#"+userBlockId).length < 1)
+		var userBlockId = 'cocosApplication__UserBlock';
+		if($('body').find('#'+userBlockId).length < 1)
 		{
-			$("body").append(
+			$('body').append(
 			 	'<div id=\''+userBlockId+'\' style=\'display: block; position: absolute; top: 0px; left: 0px; z-index: 99999; width: 100%; height: 100%; background-color: rgba(0,0,0,0); cursor: wait;\'>'
 				+ ' </div>'
 			);
 		}
 
-		$("body").find("#"+userBlockId).show();
+		$('body').find('#'+userBlockId).show();
 	}
 
 	/**
@@ -2759,10 +3569,10 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	{
 		this.heartbeat();
 
-		var userBlockId = "cocosApplication__UserBlock";
-		if($("body").find("#"+userBlockId).length > 0)
+		var userBlockId = 'cocosApplication__UserBlock';
+		if($('body').find('#'+userBlockId).length > 0)
 		{
-			$("body").find("#"+userBlockId).hide();
+			$('body').find('#'+userBlockId).hide();
 		}
 	}
 
@@ -2851,8 +3661,6 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			+ ' - readyStates: ' + requestHandler.getHttpReadyStates(true)
 			+ ' (timeout setting: ' + requestTimeout + ')';
 
-		console.log('requestMessage: ' + requestMessage);
-
 		if(_networkInterruptedRequests.length < 20)
 		{
 			// Add message for request to _networkInterruptedRequests, with a maximum
@@ -2919,11 +3727,11 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				var message = 'Got ' + _networkInterruptions + ' network interruption between ' + _firstNetworkInterruption.toUTCString() + ' and ' + _lastNetworkInterruption.toUTCString();
 				if(_networkInterruptions > 20)
 				{
-					_networkInterruptedRequests.push(" ... and " + (_networkInterruptions-20) + " more. ")
+					_networkInterruptedRequests.push(' ... and ' + (_networkInterruptions-20) + ' more. ')
 				}
 			}
 
-			var comments = "Failed requests:\n\n" + _networkInterruptedRequests.join("\n\n");
+			var comments = 'Failed requests:'+"\n\n" + _networkInterruptedRequests.join("\n\n");
 
 			// Reset networkInterruption-variables
 			//
@@ -2994,8 +3802,8 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		if(this.applicationRunning() || isTrue(forceReload))
 		{
 			_stopApplication();
-
 			logInfo('Application going down for reload');
+			this.showReload();
 
 			_setStatusToAPI
 			(
@@ -3023,6 +3831,8 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		}
 		else
 		{
+			this.showReload();
+
 			// Nothing to do here... application is already 'stopped', so it will / must
 			// reload soon, hopefully.
 			_tryToReloadApplication(true);
@@ -3621,6 +4431,9 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 
 	}.bind(this);
 
+	/**
+	 * @brief      { function_description }
+	 * @return     { description_of_the_return_value } */
 	var _getCoCoSDeviceKey = function()
 	{
 		var deviceKeyFromUrl = getRequestParameter('deviceKey');
@@ -3628,6 +4441,21 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		if(!isEmpty(deviceKeyFromUrl))
 		{
 			return deviceKeyFromUrl;
+		}
+
+		return '';
+	}
+
+	/**
+	 * @brief      { function_description }
+	 * @return     { description_of_the_return_value } */
+	var _getCoCoSIAm = function()
+	{
+		var iAmFromUrl = getRequestParameter('iam');
+
+		if(!isEmpty(iAmFromUrl))
+		{
+			return iAmFromUrl;
 		}
 
 		return '';
@@ -3708,7 +4536,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 
 	}.bind(this);
 
-	var _tryToLogin
+	var _tryToLogin;
 
 	/**
 	 * Connects a with the CoCoS API.
@@ -3727,12 +4555,21 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		{
 			_logStepToConsole('Go connect to API on host: \'' + apiHost + '\' - path: \'' + apiPath + '\' - Using key: \'' + apiKey + '\'.');
 
+			if(isEmpty(apiHost))
+			{
+				apiHost = window.location.host;
+				_logStepToConsole('No host given, using \''+apiHost+'\' instead.');
+			}
+
 			var freshConnect = false;
 
 			if(typeof(cocosAPI) == 'function')
 			{
 				apiConnector = new cocosAPI(apiHost, apiPath, apiKey, freshConnect);
 			}
+
+			console.warn('apiConnector.enableDebug...');
+			apiConnector.enableDebug();
 
 			if(cocosApplicationActAsDevice())
 			{
@@ -3741,6 +4578,12 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				{
 					apiConnector.setDeviceKey(apiDeviceKey);
 				}
+			}
+
+			var apiIAm = _getCoCoSIAm()
+			if(!isEmpty(apiIAm))
+			{
+				apiConnector.setIAm(apiIAm);
 			}
 
 			//
@@ -3839,17 +4682,23 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				logToConsole(message, DEBUG_ORIGIN_API_CONNECTOR);
 			});
 
+			//
+			apiConnector.setCallbackUserSwitched(function()
+			{
+				_reloadApplication(true);
+			});
+
 
 			// Check if debug for the API is enabled by the apps-configuration.
 			// If so, enable debug in the apiConnector.
 			//
 			if(isTrue(this.getConfigVar('apiDebug')))
 			{
-				apiConnector.enableDebug();
+				// apiConnector.enableDebug();
 			}
 			else
 			{
-				apiConnector.disableDebug();
+				// apiConnector.disableDebug();
 			}
 
 			_logStepToConsole('Successfully setup apiConnector-instance');
@@ -3872,11 +4721,20 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			{
 				if(isTrue(available))
 				{
-					apiConnector.isAuthorized(function(isAuthorized, userData)
+					_logStepToConsole('Successfully connected with the CoCoS API on \''+apiHost+'\'.', COCOS_LOG_TYPE_SUCCESS);
+
+					apiConnector.isAuthorized(function(isAuthorized, userData, response, rqh)
 					{
+						// Set deviceId and/or topologyId based on data from
+						// payload of accessToken, received from the CoCoS
+						// API.
+						//
+						_setDeviceId(apiConnector.getDeviceId())
+						_setTopologyId(apiConnector.getTopologyId());
+
 						if(isAuthorized === true)
 						{
-							_logStepToConsole('Authorized on CoCoS API');
+							_logStepToConsole('Authorized on CoCoS API', COCOS_LOG_TYPE_INFO);
 
 							// Check for callbackFunction, execute is available.
 							if(typeof(callbackSuccess) === 'function')
@@ -3886,9 +4744,63 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 						}
 						else
 						{
-							_logStepToConsole('Not authorized on CoCoS API');
-							_loginOntoCoCoSAPI(callbackSuccess, callbackError);
+							if(isObject(rqh) && isFunction(rqh.getHttpStatusCode) && (rqh.getHttpStatusCode() == 403))
+							{
+								if(cocosApplicationActAsDevice())
+								{
+									//
+									this.showDeviceOutOfUse();
+									_scheduleReload();
+								}
+								else if(cocosApplicationActAsApplication())
+								{
+									var messages = extract(response, 'info', 'messages');
+									var messageFound = false;
+
+									if(messages.length > 0)
+									{
+										$.each(messages, function(k, message)
+										{
+											if(isFalse(messageFound))
+											{
+												var tag = extract(message, 'tag');
+												switch(tag)
+												{
+													case 'deviceNotFound':
+													case 'deviceUnavailable':
+														messageFound = true;
+														showMissingDevice();
+														break;
+
+													case 'locationNotFound':
+													case 'locationUnavailable':
+														messageFound = true;
+														showMissingTopology();
+														break;
+												}
+											}
+										});
+									}
+
+									if(isFalse(messageFound))
+									{
+										var error = apiConnector.getErrorFromResponse(response);
+
+										//
+										this.showApplicationOutOfUse();
+									}
+									_scheduleReload();
+								}
+							}
+							else
+							{
+								_logStepToConsole('Not authorized on CoCoS API');
+								_loginOntoCoCoSAPI(callbackSuccess, callbackError);
+							}
 						}
+
+						return false;
+
 					}.bind(this));
 				}
 				else
@@ -3955,7 +4867,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 					// Check for callbackError, execute is available.
 					if(typeof(callbackError) === 'function')
 					{
-						callbackError("Login failed");
+						callbackError('Login failed');
 					}	
 				}
 			});
@@ -4001,7 +4913,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 						// Check for callbackError, execute is available.
 						if(typeof(callbackError) === 'function')
 						{
-							callbackError("Login failed");
+							callbackError('Login failed');
 						}	
 					}
 				});
@@ -4194,7 +5106,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				configLibrary = 'system';
 				configCollection = 'configurations';
 				configOptions = {
-					q: "library:" + libColType['library'] + ",collection:" + libColType['collection'] +",type:" + libColType['type'],
+					q: 'library:' + libColType['library'] + ',collection:' + libColType['collection'] +',type:' + libColType['type'],
 					limit: 10000
 				};
 			}
@@ -4681,7 +5593,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				textlibLibrary = 'languages';
 				textlibCollection = 'textlibTags';
 				textlibOptions = {
-					q: "library:" + libColType['library'] + ",collection:" + libColType['collection'] +",type:" + libColType['type'],
+					q: 'library:' + libColType['library'] + ',collection:' + libColType['collection'] + ',type:' + libColType['type'],
 					limit: 10000,
 				};
 			}	
@@ -4792,11 +5704,11 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 					// API.
 					//
 					var textLabel = {
-						"tag" : tag,
-						"library" : textlibLibrary,
-						"collection" : textlibCollection,
-						"type" : textlibType,
-						"form" : 'shortText',
+						'tag':		tag,
+						'library':	textlibLibrary,
+						'collection':	textlibCollection,
+						'type':		textlibType,
+						'form':		'shortText',
 					}
 
 					// Now, for all languages available in the initTextLib, go
@@ -5753,7 +6665,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				if(objectSize(appConfig) > 0)
 				{
 					//
-					_logStepToConsole('Done received configuration for application!', 'confirm');
+					_logStepToConsole('Succesfully received configuration for application!', 'confirm');
 				}
 				else
 				{
@@ -5847,7 +6759,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			//
 			function(isAuthorized, isLoggedIn, userData)
 			{
-				_logStepToConsole('Successfully connected onto the CoCoS API!');
+				_logStepToConsole('Successfully connected (and authorized) onto the CoCoS API!');
 
 				datastore['isAuthorized'] = isAuthorized;
 				datastore['isLoggedIn'] = isLoggedIn;
@@ -5977,6 +6889,18 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		else
 		{
 			_logStepToConsole('Device-identification skipped due to value of constant COCOS_APPLICATION_ACT_DEVICE.');
+
+			// Check if identified as device from userData
+			//
+			var userData = extract(datastore, 'userData');
+			if(!isEmpty(extract(datastore, 'userData', 'deviceid')) && (extract(datastore, 'userData', 'deviceid') != 0))
+			{
+				datastore['isDevice'] = true;
+				datastore['isDeviceActive'] = true;
+				datastore['deviceData'] = {
+					'idDevice': extract(datastore, 'userData', 'deviceId')
+				};
+			}
 
 			// Device-identification skipped, go to next step.
 			//
@@ -6222,12 +7146,12 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	 */
 	var _09_getAplicationLanguages = function(datastore)
 	{
-		_logStepToConsole('Get languages for application from API');
-
 		// Check if textlibs are needed
 		//
 		if(cocosApplicationUseTextlib())
 		{
+			_logStepToConsole('Get languages for application from API');
+
 			if(cocosApplicationUseLocalTextlib())
 			{
 				// Add default language
@@ -6582,6 +7506,28 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		{
 			_startListenToEvents(true);
 		}
+		else
+		{
+			if(!isEmpty(_applicationDeviceId) && (_applicationDeviceId != 0))
+			{
+				datastore['isDevice'] = true;
+				datastore['isDeviceActive'] = true;
+				datastore['deviceData'] = {
+					'id': _applicationDeviceId,
+					'name': apiConnector.getDeviceName()
+				};
+			}
+		}
+
+		if(!isEmpty(_applicationTopologyId) && (_applicationTopologyId != 0))
+		{
+			datastore['idTopologyActive'] = true;
+			datastore['idTopologyActive'] = true;
+			datastore['topologyData'] = {
+				'id': _applicationTopologyId,
+				'name': apiConnector.getTopologyName()
+			};
+		}
 
 		if(typeof(_applicationCallbackFunction) === 'function')
 		{
@@ -6591,7 +7537,8 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				extract(datastore, 'userData'),
 				extract(datastore, 'isDevice'),
 				extract(datastore, 'isDeviceActive'),
-				extract(datastore, 'deviceData')
+				extract(datastore, 'deviceData'),
+				extract(datastore, 'topologyData'),
 			);
 		};
 
@@ -6718,20 +7665,20 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 					_applicationEventListner = apiConnector.continuousRead
 					(
 					 	// library
-						"system",
+						'system',
 
 						// collection
-						"eventlist",
+						'eventlist',
 
 						// identifier
-						"",
+						'',
 
 						// association
 						null,
 
 						// data
 						{
-							q: "deviceId:"+this.getDataFromDevice('id')
+							q: 'deviceId:'+this.getDataFromDevice('id')
 						},
 
 						// options
@@ -7007,7 +7954,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 
 		if(!isset(target) || isEmpty(target))
 		{
-			target = $("body");
+			target = $('body');
 		}
 		else if(isString(target))
 		{
@@ -7016,7 +7963,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 
 		if(!isset(view) || isEmpty(view))
 		{
-		 	view = "main";
+		 	view = 'main';
 		}
 
 		$.ajax
@@ -7045,8 +7992,8 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	// Thanks to Fabrizio Bianchi, https://codepen.io/_fbrz/pen/mpiFE
 	//
 	/* var _loadingHtml = ''
-		+ '<div id="cocosApplicationLoader">'
-  			+ '<div id="cocosApplicationLoaderBox"></div>'
+		+ '<div id=\'cocosApplicationLoader\'>'
+  			+ '<div id=\'cocosApplicationLoaderBox\'></div>'
 		+ '</div>'; 
 
 	/* var _loadingCss = ''
@@ -7085,7 +8032,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
     	// Thanks to Luuk Haas, https://projects.lukehaas.me/css-loaders/
     	//
 	var _loadingHtml = ''
-		+ ' <div id="cocosApplicationLoader">Loading...</div> ';
+		+ ' <div id=\'cocosApplicationLoader\'>Loading...</div> ';
 
     	var _loadingCss = ''
     		+ ' #cocosApplicationLoader { '

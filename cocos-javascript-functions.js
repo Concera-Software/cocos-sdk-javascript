@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2017-??-??
- * @lastChange		2020-06-15
- * @version		1.20.166
+ * @lastChange		2020-08-11
+ * @version		1.20.223
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,9 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-08-11		1.20.223	SvB
+ *  	[Addad] Added functions getDefaultLanguage() and getBrowserLanguage().
  *
  *  2020-06-15		1.20.166	SvB
  *  	[Added] Added function removeFromArray.
@@ -122,6 +125,8 @@
 // Counter for unique identifier generation
 //
 var __COCOS_UNIQUE_ID_COUNTER__=0;
+
+const _defaultLanguage = 'EN';
 
 /* getIdentifier()
  *
@@ -3380,4 +3385,94 @@ function isLightColor(colorString)
 function isDarkColor(colorString)
 {
 	return isFalse(isLightColor(colorString));
+}
+
+/**
+ * { function_description }
+ *
+ * @param      {<type>}  obj     The object
+ * @return     {<type>}  { description_of_the_return_value }
+ */
+function lowercaseObjectKeys(obj)
+{
+	if(isObject(obj))
+	{
+		var keys = Object.keys(obj);
+		var n = keys.length;
+		while (n--)
+		{
+			var key = keys[n]; // "cache" it, for less lookups to the array
+			if (key !== key.toLowerCase()) // might already be in its lower case version
+			{ 
+				obj[key.toLowerCase()] = obj[key] // swap the value to a new lower case key
+				delete obj[key] // delete the old key
+			}
+		}
+		return (obj);
+	}
+
+	return null;
+}
+
+/**
+ * Gets the default language.
+ *
+ * @return     {<type>}  The default language.
+ */
+function getDefaultLanguage()
+{
+	return _defaultLanguage;
+}
+
+/**
+ * Gets the browser language.
+ */
+function getBrowserLanguage()
+{
+	if(isset(navigator.language))
+	{
+		language = navigator.language;
+	}
+	else if(isset(navigator.languages))
+	{
+		if(isObject(navigator.languages) && isset(navigator.languages[0]))
+		{
+			language = navigator.languages[0];
+		}
+		else if(isString(navigator.language))
+		{
+			language = navigator.languages;
+		}
+	}
+	else if(isset(navigator['userLanguage']))
+	{
+		language = navigator['userLanguage'];
+	}
+	else if(isset(navigator['systemLanguage']))
+	{
+		language = navigator['systemLanguage'];
+	}
+
+	//
+	if(isEmpty(language))
+	{
+		language = getDefaultLanguage();
+	}
+
+	//
+	if(isString(language))
+	{
+		if(language.indexOf('-') > -1)
+		{
+			language = language.split('-');
+			if(isset(language[0]))
+			{
+				language = language[0];
+			}
+		}
+
+		return language.toUpperCase();
+	}
+
+	return;	
 }

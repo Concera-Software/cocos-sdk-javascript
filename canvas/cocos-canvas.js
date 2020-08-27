@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2018-?
- * @lastChange		2020-06-17
- * @version		1.20.168
+ * @lastChange		2020-08-18
+ * @version		1.20.230
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -24,6 +24,12 @@
  *  	[Type] what...
  *  	[Type] what else...
  *
+ *  2020-08-18		1.20.230	SvB
+ *  	[Fixed] Fixed issues when switching between canvasses with/without a backgroundColor and/or
+ *	backgroundImage.
+ *	[Deprecated] Disabled handling for actions openCanvas and prompt, because they're not working
+ *	properly.
+ *
  *  2020-06-17		1.20.168	SvB
  *  	[Fixed] When enabling/disabling groups/objects with childs (or making them visible/invisible),
  *	the properties of the objects 'inside' (the childs) will also be changed, making them all
@@ -33,6 +39,7 @@
  *  	[Fixed] Fixed some issues with the canvas, which kept opening new requests again and again
  *	when resizing/rebuilding the canvas. Exceding the maximum amount of simultanious requests
  *	on the same domain/host.
+ *	[Removed] Removed lot of console.log-calls and other junk-code.
  *
  *  2019-09-06		1.19.248	SvB
  *  	[Changed] Changed the sort-parameter from -microtime to -timestamp to prevent executing a
@@ -69,7 +76,7 @@ class CocosCanvas
 	* @param canvasHolder This needs to be the element where the canvas has to be build in.
 	*
 	*/ 
-	constructor(canvasHolder,identifier,apiConnector,callbackFunction)
+	constructor(canvasHolder,identifier,apiConnector,callbackFunction,callbackTagUpdate)
 	{
 		// Initialize some vars we need here...
 		//
@@ -115,6 +122,7 @@ class CocosCanvas
 
 		// Set callbackFunction
 		this.callback = callbackFunction;
+		this.callbackTagUpdate = callbackTagUpdate;
 
 		// console.log("GO CANVAS!");
 		// console.log(this.apiConnector);
@@ -176,26 +184,113 @@ class CocosCanvas
 			{
 				expand: 'files,canvasItems(files,events)',
 				q: 'canvasItems(status:***)',
-				sort: 'canvasItems(idParent)'
+				sort: 'canvasItems(idParent)',
+
+				// Field for hmi/canvas
+				fields: [
+					'id',
+					'idParent',
+					'name',
+					'width',
+					'height',
+					'backgroundUrl',
+					'backgroundColor',
+					'timestamp'
+				].join(',')
+					
+					// Field for hmi/canvas/files
+					+ ',files(' + [
+						'id',
+						'name',
+						'fileUrl',
+					].join(',') + ')'
+
+					// Field for hmi/canvas/canvasItems
+					+ ',canvasItems(' + [
+						'id',
+						'idParent',
+						'name',
+						'prefix',
+						'x',
+						'y',
+						'z',
+						'type',
+						'index',
+						'itemIndex',
+						'visible',
+						'blinkingVisibleActive',
+						'blinkingVisibleFrequency',
+						'enabled',
+						'width',
+						'height',
+						'color',
+						'strokeWidth',
+						'strokeColor',
+						'blinkingBorderColorActive',
+						'blinkingBorderColorOn',
+						'blinkingBorderColorOff',
+						'blinkingBorderColorFrequency',
+						'cornerRadius',
+						'fromCentre',
+						'text',
+						'fontSize',
+						'fontFamily',
+						'iconSource',
+						'status'
+					].join(',')
+
+						// Field for hmi/canvas/canvasItems/events
+						+ ',events(' + [
+							'id',
+							'idCanvas',
+							'idTargetTag',
+							'idScript',
+							'eventType',
+							'location',
+							'action',
+							'value',
+							'status',
+						].join(',') + ')'
+
+					 + ')'
 			};
 
 			this.apiConnector.read('hmi', 'canvases', this.identifier, null, options, null, function(response)
 			{
-				// console.log(209);
-				if(isset(response.data[0].data.files.data[0]))
+				// Check backgroundUrl from API Response
+				//
+				var backgroundUrl = extract(response, 'data', 0, 'data', 'backgroundUrl');
+
+				// When no backgroundUrl is found, check if we can find a linked
+				// file from the files-expand.
+				// 
+				if(isEmpty(backgroundUrl))
 				{
-					var backgroundUrl = this.apiConnector.getFileURL(response.data[0].data.files.data[0].data, false);
-					// console.log(backgroundUrl);
-				
-					overwriteConfigVar('designedLayoutBackground', encodeURI(backgroundUrl));
+					var backgroundFile = extract(response, 'data', 0, 'data', 'files', 'data', 0);
+					if(isObject(backgroundFile))
+					{
+						// When found, fetch the filrUrl from the fileData
+						//
+						backgroundUrl = this.apiConnector.getFileURL(extract(backgroundFile, 'data'), false);
+						
+						// If any backgroundUrl is found, overwrite the data
+						// in the original response.
+						//
+						if(!isEmpty(backgroundUrl))
+						{
+							response.data[0].data.backgroundUrl = backgroundUrl;
+						}
+					}
 				}
 
+				//
 				overwriteConfigVar('designedLayoutWidth',response.data[0].data.width); 
 				overwriteConfigVar('designedLayoutHeight',response.data[0].data.height); 
-				
+					
+				//
 				this.canvasItems = response.data[0].data.canvasItems.data;
-				// console.log(this.canvasItems);
 				this.buildCanvas(response.data[0].data);
+
 			}.bind(this));
 		}
 		else
@@ -239,12 +334,27 @@ class CocosCanvas
 			
 			this.scaleFactor = this.calcScaleFactor();
 
-			if(isset(getConfigVar("designedLayoutBackground")))
+			var backgroundColor = extract(data, 'backgroundColor');
+			var backgroundUrl = extract(data, 'backgroundUrl');
+
+			if(!isEmpty(backgroundColor))
 			{
-				this.canvas.css("background-image", "url(" + getConfigVar("designedLayoutBackground") + ")");
+				this.canvas.css("background-color", backgroundColor);
+			}
+			else
+			{
+				this.canvas.css("background-color", 'transparent');
+			}
+
+			if(!isEmpty(backgroundUrl))
+			{
+				this.canvas.css("background-image", "url(" + backgroundUrl + ")");
 				this.canvas.css("background-size", "cover");
 				this.canvas.css("background-repeat", "no-repeat");
-				//this.canvas.css("background-color","#c9c9c9");
+			}
+			else
+			{
+				this.canvas.css("background-image", "none");
 			}
 
 			this.canvas.css
@@ -377,10 +487,12 @@ class CocosCanvas
 		var itemsLength = source.length;
 		var loop = true;
 		var i = 0;
+
 		// console.log("getLayerEvents");
 		while((i < itemsLength) && (loop === true))
 		{
 			var item = source[i].data;
+
 			// console.log(item);
 			if(item.id == layer.id)
 			{
@@ -406,14 +518,7 @@ class CocosCanvas
 			i++;
 		}
 
-		if(layerEvents.length > 0)
-		{
-			return layerEvents;
-		}
-		else
-		{
-			return false;
-		}
+		return layerEvents;
 	}
 	
 	//
@@ -566,14 +671,20 @@ class CocosCanvas
 	handleEvent(layer, event)
 	{
 		var canvasItem = this.getCanvasItemByLayer(layer);
-		// console.log(canvasItem);
+
 		if(isTrue(canvasItem.enabled))
 		{
 			if(isset(canvasItem))
 			{
 				var events = this.getLayerEvents(canvasItem , event);
-
-				if(!events)
+				if(events.length > 0)
+				{
+					$.each(events, function(key, event)
+					{
+						this.executeEventResponse(event);
+					}.bind(this));
+				}
+				else
 				{	
 					var parent = this.getParentByChild(canvasItem.id);
 					
@@ -583,10 +694,6 @@ class CocosCanvas
 						this.handleEvent(parentLayer,event);
 					}
 				}
-				$.each(events, function(key, event)
-				{
-					this.executeEventResponse(event);
-				}.bind(this));
 
 			}
 		}
@@ -599,6 +706,7 @@ class CocosCanvas
 		{
 			switch(response.action)
 			{
+				/*
 				case "openCanvas":
 					if($("#01d0a15c5e01f9f9bb31b4e931ef48691").length == 0)
 					{
@@ -626,18 +734,20 @@ class CocosCanvas
 							value: promtValue
 						};
 						
-						this.apiConnector.patch("system","taglist",response.idTag,null,null,postData, function(response)
+						this.apiConnector.patch("system","taglist",response.idTargetTag,null,null,postData, function(response)
 						{
 
 						}.bind(this));
 					}
 				break;
+				*/
 			}
 		}
 		else if(response.location == 'server')
 		{
 			this.apiConnector.patch('hmi', 'canvasItemEvents', response.id, null, null, {'handle':1}, function(response)
 			{
+				//
 				
 			}.bind(this));
 
@@ -1178,6 +1288,12 @@ class CocosCanvas
 					// is? Ja toch?
 					//
 				}
+
+				if(isFunction(this.callbackTagUpdate))
+				{
+					this.callbackTagUpdate();
+				}
+
 			}.bind(this),
 			// callbackError
 			function(error, response, requestHandler)

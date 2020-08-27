@@ -9,11 +9,11 @@
  * @author(s)		Stefan van Buren
  * @copyright 		(concera software - https://concera.software
  * @dateCreated		2018-11-05
- * @lastChange		2020-02-17
- * @version		1.20.047
+ * @lastChange		2020-07-23
+ * @version		1.20.204
  * -------------------------------------------------------------------------------------------------
  *
- * # CHANGELOG:
+ * -- CHANGELOG:
  * 
  * All notable changes to this project will be documented in this file. The format will be based on
  * the example below. The first line will indicate when, in what version and who made the change(s),
@@ -24,6 +24,10 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-07-23		1.20.204	SvB
+ *  	[Fixed] Fixed the $.button-extension in order to be complatible with both FontAwesome 4 and
+ *	FontAwesome 5.
  *
  *  2020-02-17		1.20.047	SvB
  *  	[Added] Added the $.button-object, which can be used to toggle the state of a button to a
@@ -487,7 +491,7 @@ $.fn.button = function(action)
 
 		this.each(function()
 		{
-			if (action === 'loading')
+			if ((action === 'loading') || (action === 'load'))
 			{
 				if($(this).attr('buttonLoading') != 'true')
 				{

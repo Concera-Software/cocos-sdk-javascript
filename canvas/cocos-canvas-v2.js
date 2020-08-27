@@ -28,6 +28,7 @@
  *  	[Fixed] Fixed some issues with the canvas, which kept opening new requests again and again
  *	when resizing/rebuilding the canvas. Exceding the maximum amount of simultanious requests
  *	on the same domain/host.
+ *	[Removed] Removed lot of console.log-calls and other junk-code.
  *
  *  2019-09-06		1.19.248	SvB
  *  	[Changed] Changed the sort-parameter from -microtime to -timestamp to prevent executing a
