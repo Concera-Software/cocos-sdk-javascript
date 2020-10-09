@@ -8,8 +8,8 @@
  * @author(s)		Erwin Vorenhout, Stefan van Buren
  * @copyright 		Concera Software - https://concera.software/
  * @dateCreated		2018-02-xx
- * @lastChange		2020-08-27
- * @version		1.20.239
+ * @lastChange		2020-09-20
+ * @version		1.20.263
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,14 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-09-20		1.20.263	SvB
+ *  	[Fixed] Updated handling for noLicense-error. When the application (for example the CoCos
+ *	management) disallows this message, the application will continue, also when no license is
+ * 	available.
+ *	[Changed] Changed some overlay-messages in order to inform better about why the application
+ *	can't start, for example: No license or Device not allowed.
+ *	[Added] Added private _disconnectFromCoCoSAPI-function.
  *
  *  2020-08-27		1.20.239	SvB
  *  	[Changed] Changed reload-handling.
@@ -813,6 +821,24 @@ else
 		return ((typeof(COCOS_APPLICATION_MONITOR_HEARTBEAT) == 'undefined') || (COCOS_APPLICATION_MONITOR_HEARTBEAT === true));
 	}
 
+	/**
+	 * [cocosApplicationAllowNoLicense description]
+	 * @return {[type]} [description]
+	 */
+	function cocosApplicationAllowNoLicense()
+	{
+		return ((typeof(COCOS_APPLICATION_ALLOW_NO_LICENSE) != 'undefined') && (COCOS_APPLICATION_ALLOW_NO_LICENSE === true));
+	}
+
+	/**
+	 * [cocosApplicationIsLicenseError description]
+	 * @param  {[type]} error [description]
+	 * @return {[type]}       [description]
+	 */
+	function cocosApplicationIsLicenseError(error)
+	{
+		return (error.toLowerCase().indexOf('no license') > -1);
+	}
 }
 
 /**
@@ -1419,6 +1445,7 @@ var _logToApi = function(message, origin, type, comments, callbackSuccess, callb
 		app.logToApi(message, origin, type, comments, callbackSuccess, callbackError);
 	}
 }
+
 /**
  *
  * @constructor
@@ -1448,8 +1475,11 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	};
 	_defaultTextlib = lowercaseObjectKeys(_defaultTextlib);
 
+	var _applicationDeviceId = null;
 	var _applicationDeviceData = {};
 	var _applicationDeviceTags = {};
+
+	var _applicationTopologyId = null;
 
 	var _applicationLanguage = getBrowserLanguage();
 	var _applicationLanguages = {};
@@ -1494,7 +1524,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		var versions = {
 			jsSDK: (!isNull(apiConnector)?apiConnector.getVersion():null),
 			jsAppSDK: this.getVersion(),
-			app: APP_VERSION,
+			app: ((typeof(APP_VERSION) != 'undefined')?APP_VERSION:null),
 		};
 
 		if(isTrue(asString))
@@ -2363,6 +2393,11 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				{
 					errorFunction(null, response);
 				}
+		
+				if(isFunction(completeFunction))
+				{
+					completeFunction();
+				}
 			}
 		}
 	};
@@ -2706,7 +2741,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	{
 		apiConnector.read(
 			'topology',
-			'locations',
+			'availableLocations',
 			null,
 			null,
 			null,
@@ -2725,6 +2760,8 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				//
 				if(xhr.getHttpStatusCode() == 403)
 				{
+					var topologyId = this.getTopologyId();
+
 					// However, if the topologyId is set to -1,
 					// this means a location is optional, not
 					// required. So instead of throwing an 
@@ -2736,11 +2773,13 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 					// 
 					if(topologyId == -1)
 					{
-						logWarningToConsole('Unable to get locations/topology from CoCoS API (not allowed), continue selecting the \'no-location\' with id \'-1\'.', DEBUG_ORIGIN_APPLICATION_SDK);
+						var onlyLocationId = -1;
+
+						logWarningToConsole('Unable to get locations/topology from CoCoS API (not allowed), continue selecting the \'no-location\' with id \''+onlyLocationId+'\'.', DEBUG_ORIGIN_APPLICATION_SDK);
 
 						// No permissions for a location...
 						//
-						_setLocation(-1, function(response, xhr)
+						_setLocation(onlyLocationId, function(response, xhr)
 						{
 							logSuccessToConsole('Successfully selected location with id \''+onlyLocationId+'\', we\'re now at \'' + this.getTopologyName() + '\'.', DEBUG_ORIGIN_APPLICATION_SDK);
 							
@@ -2753,7 +2792,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 								callbackFunction(_availableLocations);
 							}
 
-						}, function(error, response, xhr)
+						}.bind(this), function(error, response, xhr)
 						{
 							// TODO: What here?
 							//
@@ -2781,9 +2820,9 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 					//
 				}
 
-			}
+			}.bind(this)
 		);
-	};
+	}.bind(this);
 
 	var _handleLocationResponse = function(response, callbackFunction)
 	{
@@ -2844,6 +2883,35 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 
 			}, null, false);
 		}
+// // When no locations found, but the location isn't require (topologyId == -1),
+// // automatically select -1  as location.
+// // 
+// else if((topologyId == -1) && (_availableLocations.length == 0))
+// {
+// 	logMessageToConsole('No locations found, but none required. Go use public location, continue selecting location with id \'-1\'.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+// 	_setLocation(-1, function(response, xhr)
+// 	{
+// 		logSuccessToConsole('Successfully selected location with id \'1\', we\'re now at \'' + onlyLocationName + '\'.', DEBUG_ORIGIN_APPLICATION_SDK);
+
+// 		_availableLocations = [];
+// 		if(isFunction(callbackFunction))
+// 		{
+// 			callbackFunction(_availableLocations);
+// 		}
+
+// 	}, function(error, response, xhr)
+// 	{
+// 		// TODO: What here?
+// 		//
+// 		if(isFunction(callbackFunction))
+// 		{
+// 			callbackFunction(_availableLocations);
+// 		}
+
+// 	}, null, false);
+
+// }
 		else
 		{
 			logMessageToConsole('Found '+_availableLocations.length+' locations/topology, a location must be selected in order to continue...', DEBUG_ORIGIN_APPLICATION_SDK);
@@ -3382,11 +3450,41 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		_showOutOfUse(title, message, true);
 	}
 
+	var showNoLicense = function(title, message)
+	{
+		if(isEmpty(title))
+		{
+			title = 'Licentie verlopen/niet beschikbaar.';
+		}
+
+		if(isEmpty(message))
+		{
+			message = 'Neem contact op met uw (applicatie)beheerder.';
+		}
+
+		_showOutOfUse(title, message);	
+	}
+
 	var showMissingDevice = function(title, message)
 	{
 		if(isEmpty(title))
 		{
 			title = 'Apparaat niet herkend/beschikbaar.';
+		}
+
+		if(isEmpty(message))
+		{
+			message = 'Neem contact op met uw (applicatie)beheerder.';
+		}
+
+		_showOutOfUse(title, message);
+	}
+
+	var showMissingGuestDevice = function(title, message)
+	{
+		if(isEmpty(title))
+		{
+			title = 'Geen toegang voor dit apparaat.';
 		}
 
 		if(isEmpty(message))
@@ -4568,9 +4666,6 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				apiConnector = new cocosAPI(apiHost, apiPath, apiKey, freshConnect);
 			}
 
-			console.warn('apiConnector.enableDebug...');
-			apiConnector.enableDebug();
-
 			if(cocosApplicationActAsDevice())
 			{
 				var apiDeviceKey = _getCoCoSDeviceKey();
@@ -4694,11 +4789,11 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			//
 			if(isTrue(this.getConfigVar('apiDebug')))
 			{
-				// apiConnector.enableDebug();
+				apiConnector.enableDebug();
 			}
 			else
 			{
-				// apiConnector.disableDebug();
+				apiConnector.disableDebug();
 			}
 
 			_logStepToConsole('Successfully setup apiConnector-instance');
@@ -4717,7 +4812,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			apiConnector.setTimeout(30);
 			_logStepToConsole('Set timeout for apiRequests to 30 seconds');
 			
-			apiConnector.isAvailable(function(available, error)
+			apiConnector.isAvailable(function(available,  error, response, rqh)
 			{
 				if(isTrue(available))
 				{
@@ -4772,6 +4867,11 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 														showMissingDevice();
 														break;
 
+													case 'guestDeviceUnavailable':
+														messageFound = true;
+														showMissingGuestDevice();
+														break;
+
 													case 'locationNotFound':
 													case 'locationUnavailable':
 														messageFound = true;
@@ -4787,7 +4887,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 										var error = apiConnector.getErrorFromResponse(response);
 
 										//
-										this.showApplicationOutOfUse();
+										this.showApplicationOutOfUse(error);
 									}
 									_scheduleReload();
 								}
@@ -4805,15 +4905,86 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				}
 				else
 				{
-					apiConnector = null;
-					delete apiConnector;
-
-					if(typeof(callbackError) === 'function')
+					if(cocosApplicationIsLicenseError(error))
 					{
+						if(cocosApplicationAllowNoLicense())
+						{
+							// Check for callbackFunction, execute is available.
+							if(typeof(callbackSuccess) === 'function')
+							{
+								callbackSuccess(true, false, {});
+							}
+
+						}
+					}
+					else if(isObject(rqh) && isFunction(rqh.getHttpStatusCode) && (rqh.getHttpStatusCode() == 403))
+					{
+						if(cocosApplicationActAsDevice())
+						{
+							//
+							_disconnectFromCoCoSAPI();
+
+							//
+							this.showDeviceOutOfUse();
+							_scheduleReload();
+						}
+						else if(cocosApplicationActAsApplication())
+						{
+							var messages = extract(response, 'info', 'messages');
+							var messageFound = false;
+							
+							if(messages.length > 0)
+							{
+								$.each(messages, function(k, message)
+								{
+									if(isFalse(messageFound))
+									{
+										var tag = extract(message, 'tag');
+										switch(tag)
+										{
+											case 'deviceNotFound':
+											case 'deviceUnavailable':
+												messageFound = true;
+												showMissingDevice();
+												break;
+
+											case 'guestDeviceUnavailable':
+												messageFound = true;
+												showMissingGuestDevice();
+												break;
+
+											case 'locationNotFound':
+											case 'locationUnavailable':
+												messageFound = true;
+												showMissingTopology();
+												break;
+										}
+									}
+								});
+							}
+
+							if(isFalse(messageFound))
+							{
+								var error = apiConnector.getErrorFromResponse(response);
+									
+								//
+								_disconnectFromCoCoSAPI();
+
+								//
+								this.showApplicationOutOfUse(error);
+							}
+							_scheduleReload();
+						}
+					}
+					else if(typeof(callbackError) === 'function')
+					{
+						//
+						_disconnectFromCoCoSAPI();
+
 						if(isset(error) && !isEmpty(error))
 						{
 							callbackError('Unable to connect; ' + error);	
-						}
+						}						
 						else
 						{
 							callbackError('Unable to connect; CoCoS API not available.');	
@@ -4830,6 +5001,12 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			}
 		}
 	}.bind(this);
+
+	var _disconnectFromCoCoSAPI = function()
+	{
+		apiConnector = null;
+		delete apiConnector;
+	}
 
 	/**
 	 * { function_description }
@@ -6772,12 +6949,31 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			//
 			function(error)
 			{
-				//
-				_logStepToConsole(error, 'error');
+				if(cocosApplicationIsLicenseError(error))
+				{
+					if(cocosApplicationAllowNoLicense())
+					{
+						_logStepToConsole('Connected onto a unlicensed CoCoS API!');
+						datastore['isAuthorized'] = false;
+						datastore['isLoggedIn'] = false;
+						datastore['userData'] = {};
 
-				//
-				datastore['error'] = error;
-				_goErrorStep(datastore);
+						_goNextStep(datastore);
+					}
+					else
+					{
+						showNoLicense();
+					}
+				}
+				else
+				{
+					//
+					_logStepToConsole(error, 'error');
+
+					//
+					datastore['error'] = error;
+					_goErrorStep(datastore);
+				}
 			}
 		);
 	}

@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2017-??-??
- * @lastChange		2020-08-11
- * @version		1.20.223
+ * @lastChange		2020-09-20
+ * @version		1.20.263
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -24,8 +24,18 @@
  *  	[Type] what...
  *  	[Type] what else...
  *
+ *  2020-09-20		1.20.263	SvB
+ *  	[Added] Added values 'on' and 'off' as valid true/false values.
+ *	[Changed] When converting a number to hex, it will be uppercased.
+ *
+ *  2020-09-11		1.20.254	SvB
+ *  	[Changed] Changed value isTrue in order to allow 'on' as a valid true-value.
+ *  	[Changed] Changed value isFalse in order to allow 'off' as a valid false-value.
+ *	[Fixed] Fixed convertDuration-function, when the duration is more then 1 year, the
+ *	amount of years will be returned instead of (a lot of) days.
+ *
  *  2020-08-11		1.20.223	SvB
- *  	[Addad] Added functions getDefaultLanguage() and getBrowserLanguage().
+ *  	[Added] Added functions getDefaultLanguage() and getBrowserLanguage().
  *
  *  2020-06-15		1.20.166	SvB
  *  	[Added] Added function removeFromArray.
@@ -483,6 +493,7 @@ function isTrue(bool)
 		    || (bool === 1)
 		    || (bool === '1')
 		    || (bool === 'yes')
+		    || (bool === 'on')
 		)
 	);
 };
@@ -506,6 +517,7 @@ function isFalse(bool)
 		 	|| (bool === 0)
 		 	|| (bool === '0')
 		 	|| (bool === 'no')
+		 	|| (bool === 'off')
 		)
 	);
 };
@@ -1000,6 +1012,10 @@ function convertNumeralSystem(value, from, to, format)
 	if((typeof(format) == 'undefined') || !isFalse(format))
 	{
 		return formatNumber(convertedValue, to);
+	}
+	if(to == 16)
+	{
+		convertedValue = convertedValue.toUpperCase();
 	}
 	return convertedValue;
 }
@@ -2524,6 +2540,8 @@ function copyWindowLocationToClipboard()
  */
 function convertDuration(duration, showMilliseconds)
 {
+	var one_year_in_seconds = 31556952;
+	
 	if(!isEmpty(duration))
 	{
 		durationFloat = parseFloat(duration);
@@ -2535,10 +2553,11 @@ function convertDuration(duration, showMilliseconds)
 		}
 		else
 		{
-			var days = Math.floor((durationInt % 31536000) / 86400); 
-			var hours = Math.floor(((durationInt % 31536000) % 86400) / 3600);
-			var minutes = Math.floor((((durationInt % 31536000) % 86400) % 3600) / 60);
-			var seconds = (((durationInt % 31536000) % 86400) % 3600) % 60;
+			var years = Math.floor(durationInt / one_year_in_seconds);
+			var days = Math.floor((durationInt % one_year_in_seconds) / 86400);
+			var hours = Math.floor(((durationInt % one_year_in_seconds) % 86400) / 3600);
+			var minutes = Math.floor((((durationInt % one_year_in_seconds) % 86400) % 3600) / 60);
+			var seconds = (((durationInt % one_year_in_seconds) % 86400) % 3600) % 60;
 			var milliseconds = Math.round((durationFloat - durationInt)*1000);
 
 			if((minutes < 1) && ((hours == 0) && (days == 0)))
@@ -2560,9 +2579,13 @@ function convertDuration(duration, showMilliseconds)
 			{
 				return hours + 'h ' + minutes + 'm ' + seconds + 's';
 			}
-			else
+			else if(years < 1)
 			{
 				return days + 'd ' + hours + 'h ' + minutes + 'm';
+			}
+			else
+			{
+				return years + 'y ' + days + 'd ' + hours + 'h';
 			}
 		}
 	}

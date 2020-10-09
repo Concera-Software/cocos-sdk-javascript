@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2016-??-??
- * @lastChange		2020-08-27
- * @version		1.20.239
+ * @lastChange		2020-09-20
+ * @version		1.20.263
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,10 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-09-20		1.20.263	SvB
+ *  	[Changed] Changed the isAvailable-function, always returning the response and the
+ *	requestHandler in the callback-function.
  *
  *  2020-08-27		1.20.239	SvB
  *  	[Security] Added check on userId/userHash and sessionId/sessionHash, received on the payload
@@ -10773,7 +10777,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 
 		this.status
 		(
-		 	function(response)
+		 	function(response, rqh)
 			{
 				_checkStatusResponse
 				(
@@ -10783,19 +10787,19 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 					{
 						if(_isFunction(callbackFunction))
 						{
-							callbackFunction(true);
+							callbackFunction(true, '', response, rqh);
 						}
 					},
 					function(statusData, error)
 					{
 						if(_isFunction(callbackFunction))
 						{
-							callbackFunction(false, error);
+							callbackFunction(false, error, response, rqh);
 						}
 					}
 				);
 			},
-			function(error, response, xhr)
+			function(error, response, rqh)
 			{
 				// A status-request doesn't require to be logged in or whatsoever.
 				// So when we get a 401-statusCode back after executing a request on
@@ -10809,7 +10813,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 				// results in the cocosApiResults-object and try again to get the
 				// status of the API.
 				// 
-				if(xhr.getHttpStatusCode() == 401)
+				if(rqh.getHttpStatusCode() == 401)
 				{	
 					this.resetCookies();
 					cocosApiResults.COCOS_API_RESULT_AUTHORIZED = false;
@@ -10818,13 +10822,13 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 					// Execute this same method again, but now without any
 					// accessToken/JWT.
 					// 
-					this.isAvailable(callbackFunction, checkLicensed);
+					this.isAvailable(callbackFunction, checkLicensed, response, rqh);
 				}
 				else
 				{
 					if(_isFunction(callbackFunction))
 					{
-						callbackFunction(false, error);
+						callbackFunction(false, error, response, rqh);
 					}
 				}
 			}.bind(this)
