@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2016-??-??
- * @lastChange		2020-09-20
- * @version		1.20.263
+ * @lastChange		2020-10-09
+ * @version		1.20.282
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,10 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-10-09		1.20.282	SvB
+ *  	[Changed] Changed the handling of an request. As soon as the request reaches readySate 3
+ *  	(headers received, loading date), the timeout will be reset.
  *
  *  2020-09-20		1.20.263	SvB
  *  	[Changed] Changed the isAvailable-function, always returning the response and the
@@ -234,7 +238,7 @@
  */
 var cocosAPI = function(host, path, apiKey, freshStart)
 {
-	var JS_SDK_VERSION = '1.20.223';
+	var JS_SDK_VERSION = '1.20.282';
 
 	/***
 	 *      ___ ___ ___ _____ ___ ___  _  _   _   _
@@ -7788,6 +7792,8 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 				}
 				else
 				{
+					console.log('xhr.onreadystatechange');
+					
 					// Response handlers.
 					//
 					xhr.onreadystatechange = function()
@@ -7866,6 +7872,25 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 					//
 					xhr.onprogress = function(evt)
 					{
+						// When we're in readyState 3, it means the request is
+						// finished at the CoCoS API and now we're downloading
+						// the response from the server. The timeout(s), if
+						// available, can be cancelled, because the request is
+						// complated and the data is comming our way.
+						//
+						if(xhr.readyState == 3)
+						{
+							if(!_isNull(xhr.timeout))
+							{
+								xhr.timeout = null;
+							}
+							
+							if(!_isNull(xhr.timeout))
+							{
+								_clearRequestAbortTimer();
+							}
+						}
+
 						_executeCallbackProgress(evt, rqh, xhr);
 					}
 				}

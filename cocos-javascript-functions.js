@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2017-??-??
- * @lastChange		2020-09-20
- * @version		1.20.263
+ * @lastChange		2020-10-19
+ * @version		1.20.292
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,9 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-10-19		1.20.292	SvB
+ *  	[Added] Added getHslColorBasedOnString-function.
  *
  *  2020-09-20		1.20.263	SvB
  *  	[Added] Added values 'on' and 'off' as valid true/false values.
@@ -2792,12 +2795,19 @@ function firstNameToInitials(firstName)
  * @return     { description_of_the_return_value } */
 function filesize(b)
 {
-    var u = 0, s=1024;
-    while (b >= s || -b >= s) {
-        b /= s;
-        u++;
-    }
-    return (u ? b.toFixed(1) + ' ' : b) + ' KMGTPEZY'[u] + 'B';
+	if(!isEmpty(b) && (b > 0))
+	{
+    		var u = 0, s=1024;
+    		while (b >= s || -b >= s)
+    		{
+        		b /= s;
+        		u++;
+    		}
+
+    		return (u ? b.toFixed(1) + ' ' : b) + ' KMGTPEZY'[u] + 'B';
+    	}
+
+    	return;
 }
 
 /**
@@ -3408,6 +3418,37 @@ function isLightColor(colorString)
 function isDarkColor(colorString)
 {
 	return isFalse(isLightColor(colorString));
+}
+
+/**
+ * Gets the hsl color based on string.
+ * see: https://medium.com/@pppped/compute-an-arbitrary-color-for-user-avatar-starting-from-his-username-with-javascript-cd0675943b66
+ * 
+ * @param      {<type>}  string      The string
+ * @param      {<type>}  saturation  The saturation
+ * @param      {<type>}  lightness   The lightness
+ * @return     {string}  The hsl color based on string.
+ */
+function getHslColorBasedOnString(string, saturation, lightness)
+{
+	if(!isset(saturation) || isEmpty(saturation))
+	{
+		saturation = 45;
+	}
+
+	if(!isset(lightness) || isEmpty(lightness))
+	{
+		lightness = 65;
+	}
+
+	var hash = 0;
+	for (var i = 0; i < string.length; i++)
+	{
+		hash = string.charCodeAt(i) + ((hash << 5) - hash);
+	}
+
+	var hue = hash % 360;
+	return 'hsl('+hue+', '+saturation+'%, '+lightness+'%)';
 }
 
 /**
