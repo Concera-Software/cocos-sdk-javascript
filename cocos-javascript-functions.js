@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2017-??-??
- * @lastChange		2020-10-19
- * @version		1.20.292
+ * @lastChange		2020-11-19
+ * @version		1.20.323
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,9 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-11-19		1.20.323	SvB
+ *  	[Fixed] Fixed handling for reverse-parameter in objectSort-method.
  *
  *  2020-10-19		1.20.292	SvB
  *  	[Added] Added getHslColorBasedOnString-function.
@@ -682,10 +685,21 @@ function removeFromArray(array, value)
 function objectSort(unsortedObject, reverse)
 {
 	var sortedObject = {};
-	Object.keys(unsortedObject).sort().forEach(function(key)
+
+	if(isTrue(reverse))
 	{
-		sortedObject[key] = unsortedObject[key];
-	});
+		Object.keys(unsortedObject).sort().reverse().forEach(function(key)
+		{
+			sortedObject[key] = unsortedObject[key];
+		});
+	}
+	else
+	{
+		Object.keys(unsortedObject).sort().forEach(function(key)
+		{
+			sortedObject[key] = unsortedObject[key];
+		});
+	}
 
 	return sortedObject;
 };

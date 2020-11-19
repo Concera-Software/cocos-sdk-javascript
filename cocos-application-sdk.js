@@ -8,8 +8,8 @@
  * @author(s)		Erwin Vorenhout, Stefan van Buren
  * @copyright 		Concera Software - https://concera.software/
  * @dateCreated		2018-02-xx
- * @lastChange		2020-09-20
- * @version		1.20.263
+ * @lastChange		2020-11-19
+ * @version		1.20.323
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,20 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-11-19		1.20.323	SvB
+ *  	[Changed] Changed log...ToApi-methods, also logging to console (by default) unless set to false.
+ *	[Added] Added check for apiConnector-object in _reportLogsToCoCoSAPI-method. When not found, the
+ *  	callbackError will be called.
+ *	[Added] Added handling for httpStatusCode 503 in the _connectWithCoCoSAPI-function.
+ *
+ *  2020-11-16		1.20.320	SvB
+ *  	[Changed] Changed logToApi-function, checking if the apiConnector-object exists and the create-
+ *	or update-function is available.
+ *	[Added] Added functions _showDisconnected and _showMaintenance.
+ *	[Added] Added startMonitorApiStatus and stopMonitorApiStatus, in order to monitor the status of
+ *	the api and (based on the given config) executing actions when a specify httpStatusCode is
+ *	found/raised or ended.
  *
  *  2020-09-20		1.20.263	SvB
  *  	[Fixed] Updated handling for noLicense-error. When the application (for example the CoCos
@@ -198,6 +212,7 @@ var _debugConsoleCounter		=	0;
 var _consoleMessages 			=	[];
 
 // Defines / constants for COCOS
+//
 var DEBUG_ORIGIN_APPLICATION_SDK	=	'application';
 var DEBUG_ORIGIN_API_CONNECTOR		=	'api';
 var DEBUG_ORIGIN_DEVICE			=	'device';
@@ -213,6 +228,7 @@ var COCOS_LOG_TYPE_SUCCESS		=	'success';
 var COCOS_LOG_TYPE_DEBUG		=	'debug';
 
 // Defines / constants for COCOS
+//
 var COCOS_WILDCARD_IDENTIFIER		=	'***';
 
 var COCOS_TEXTLIB_DEFAULTVALUE		=	'-';
@@ -964,7 +980,7 @@ var logErrorToConsole = function(message, origin, logToApi, comments, callbackSu
  */
 var logErrorToApi = function(message, origin, logToConsole, comments, callbackSuccess, callbackError)
 {
-	logError(message, origin, (logToConsole === true), true, comments, callbackSuccess, callbackError);
+	logError(message, origin, (logToConsole !== false), true, comments, callbackSuccess, callbackError);
 }
 
 /**
@@ -1002,7 +1018,7 @@ var logWarningToConsole = function(message, origin, logToApi, comments, callback
  */
 var logWarningToApi = function(message, origin, logToConsole, comments, callbackSuccess, callbackError)
 {
-	logWarning(message, origin, (logToConsole === true), true, comments, callbackSuccess, callbackError);
+	logWarning(message, origin, (logToConsole !== false), true, comments, callbackSuccess, callbackError);
 }
 
 /**
@@ -1040,7 +1056,7 @@ var logInfoToConsole = function(message, origin, logToApi, comments, callbackSuc
  */
 var logInfoToApi = function(message, origin, logToConsole, comments, callbackSuccess, callbackError)
 {
-	logInfo(message, origin, (logToConsole === true), true, comments, callbackSuccess, callbackError);
+	logInfo(message, origin, (logToConsole !== false), true, comments, callbackSuccess, callbackError);
 }
 
 /**
@@ -1077,7 +1093,7 @@ var logSuccessToConsole = function(message, origin, logToApi, comments, callback
  */
 var logSuccessToApi = function(message, origin, logToConsole, comments, callbackSuccess, callbackError)
 {
-	logSuccess(message, origin, (logToConsole === true), true, comments, callbackSuccess, callbackError);
+	logSuccess(message, origin, (logToConsole !== false), true, comments, callbackSuccess, callbackError);
 }
 
 /**
@@ -1114,7 +1130,7 @@ var logConfirmToConsole = function(message, origin, logToApi, comments, callback
  */
 var logConfirmToApi = function(message, origin, logToConsole, comments, callbackSuccess, callbackError)
 {
-	logConfirm(message, origin, (logToConsole === true), true, comments, callbackSuccess, callbackError);
+	logConfirm(message, origin, (logToConsole !== false), true, comments, callbackSuccess, callbackError);
 }
 
 /**
@@ -1151,7 +1167,7 @@ var logDebugToConsole = function(message, origin, logToApi, comments, callbackSu
  */
 var logDebugToApi = function(message, origin, logToConsole, comments, callbackSuccess, callbackError)
 {
-	logDebug(message, origin, (logToConsole === true), true, comments, callbackSuccess, callbackError);
+	logDebug(message, origin, (logToConsole !== false), true, comments, callbackSuccess, callbackError);
 }
 
 /**
@@ -1222,7 +1238,7 @@ var logMessageToApi = function(message, origin, logToConsole, comments, callback
 	 */
 	var logToApi = function(message, origin, logToConsole, comments, callbackSuccess, callbackError)
 	{
-		logMessageToApi(message, origin, (logToConsole === true), comments, callbackSuccess, callbackError);
+		logMessageToApi(message, origin, (logToConsole !== false), comments, callbackSuccess, callbackError);
 	}
 
 /**
@@ -1618,14 +1634,21 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	 */
 	var _reportLogsToCoCoSAPI = function(title, text, callbackSuccess, callbackError)
 	{
-		this.logToApi(
-			title,
-			'',
-			'debug',
-			text,
-			callbackSuccess,
-			callbackError
-		);
+		if(isset(apiConnector) && isObject(apiConnector) && !isNull(apiConnector))
+		{
+			this.logToApi(
+				title,
+				'',
+				'debug',
+				text,
+				callbackSuccess,
+				callbackError
+			);
+		}
+		else
+		{
+			callbackError();
+		}
 	};
 
 	/**
@@ -1727,7 +1750,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				// Only continue when we're allowed to log the given type for the
 				// device we are.
 				//
-				if(isTrue(log))
+				if(isTrue(log) && isObject(apiConnector) && isFunction(apiConnector.update))
 				{
 					// In order to create/post a message from the frontend
 					// application into the CoCoS API when acting as a device,
@@ -1791,7 +1814,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				}
 			}
 		}
-		else
+		else if(isObject(apiConnector) && isFunction(apiConnector.create))
 		{	
 			// Go create/post a message from this frontend application into the CoCoS
 			// API, using the system/logMessage-collection
@@ -3317,13 +3340,13 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 				$('body').append
 				(
 				 	'<div id=\''+loadingId+'\' style=\'display: none; position: absolute; top: 0px; left: 0px; z-index: 99997; width: 100%; height: 100%; background-color: '+_defaultOverlayBackgroundColor+';\'>'
-						+ ' <div style=\'width: 80%; height: 30vmin; position: absolute; left: 10%; top: 50%; margin-top: -13vmin; text-align: center;\'>'
-							+ ' <font style=\'color: '+_defaultFontColor+'; line-height: 7vmin; font-size: 4vmin; font-family: '+_defaultFontFamily+'\' data-use=\'loadingTitle\'>'+title+'</font><br>'
-							+ '<div style=\'height:10vmin; width: 10vmin; margin:4vmin;\'>'
+						+ ' <div style=\'width: 80%; height: min(30vmin, 180px); position: absolute; left: 10%; top: 50%; margin-top: max(-13vmin, -78px); text-align: center;\'>'
+							+ ' <font style=\'color: '+_defaultFontColor+'; line-height: min(7vmin, 42px); font-size: min(4vmin, 24px); font-family: '+_defaultFontFamily+'\' data-use=\'loadingTitle\'>'+title+'</font><br>'
+							+ '<div style=\'height:min(10vmin, 60px); width: min(10vmin, 60px); margin:min(4vmin, 24px);\'>'
 								// + ' <img style=\'height: 10vmin; width: 10vmin; margin: 2vmin;\' src=\''+_loadingGif+'\'><br>'
 								+ _loadingHtml
 							+ '</div>'
-							+ ' <font style=\'color: '+_defaultFontColor+'; line-height: 5vmin; font-size: 3vmin; font-family: '+_defaultFontFamily+'\' data-use=\'loadingMessage\'>'+message+'</font>'
+							+ ' <font style=\'color: '+_defaultFontColor+'; line-height: min(5vmin, 30px); font-size: min(3vmin, 18px); font-family: '+_defaultFontFamily+'\' data-use=\'loadingMessage\'>'+message+'</font>'
 						+ ' </div>'
 					+ ' </div>'
 				);
@@ -3454,7 +3477,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	{
 		if(isEmpty(title))
 		{
-			title = 'Licentie verlopen/niet beschikbaar.';
+			title = 'Licentie verlopen/niet beschikbaar voor dit systeem.';
 		}
 
 		if(isEmpty(message))
@@ -3511,6 +3534,48 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 	}
 
 	/**
+	 * Shows the disconnected.
+	 *
+	 * @param      {string}  title    The title
+	 * @param      {string}  message  The message
+	 */
+	var _showDisconnected = function(title, message)
+	{
+		if(isEmpty(title))
+		{
+			title = 'Er is geen verbinding (meer) met het systeem.';
+		}
+
+		if(isEmpty(message))
+		{
+			message = 'Neem contact op met uw (applicatie)beheerder.';
+		}
+
+		_showOutOfUse(title, message);
+	}
+
+	/**
+	 * Shows the maintenance.
+	 *
+	 * @param      {string}  title    The title
+	 * @param      {string}  message  The message
+	 */
+	var _showMaintenance = function(title, message)
+	{
+		if(isEmpty(title))
+		{
+			title = 'Dit systeem is op dit moment (tijdelijk) niet beschikbaar.';
+		}
+
+		if(isEmpty(message))
+		{
+			message = 'Een ogenblik geduld alstublieft...';
+		}
+
+		_showOutOfUse(title, message);
+	}
+
+	/**
 	 * Shows the out of use.
 	 *
 	 * @param      {string}  title    The title
@@ -3535,9 +3600,9 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 		{
 			$('body').append(
 			 	'<div id=\''+outOfUseId+'\' style=\'display: none; position: absolute; top: 0px; left: 0px; z-index: 88888; width: 100%; height: 100%; background-color: '+_defaultOverlayBackgroundColor+'\'>'
-					+ ' <div style=\'width: 80%; height: 12vmin; position: absolute; left: 10%; top: 50%; margin-top: -6vmin; text-align: center;\'>'
-						+ ' <font style=\'color: '+_defaultFontColor+'; line-height: 7vmin; font-size: 4vmin; font-family: '+_defaultFontFamily+'\'>'+title+'</font><br>'
-						+ ' <font style=\'color: '+_defaultFontColor+'; line-height: 5vmin; font-size: 3vmin; font-family: '+_defaultFontFamily+'\'>'+message+'</font>'
+					+ ' <div style=\'width: 80%; height: min(12vmin, 72px); position: absolute; left: 10%; top: 50%; margin-top: max(-6vmin, -36px); text-align: center;\'>'
+						+ ' <font style=\'color: '+_defaultFontColor+'; line-height: min(7vmin, 42px); font-size: min(4vmin, 24px); font-family: '+_defaultFontFamily+'\'>'+title+'</font><br>'
+						+ ' <font style=\'color: '+_defaultFontColor+'; line-height: min(5vmin, 30px); font-size: min(3vmin, 18px); font-family: '+_defaultFontFamily+'\'>'+message+'</font>'
 					+ ' </div>'
 				+ ' </div>'
 			);
@@ -3585,10 +3650,10 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			{
 				$('body').append(
 				 	'<div id=\''+invalidSizeId+'\' style=\'position: absolute; top: 0px; left: 0px; z-index: 88888; width: 100%; height: 100%; background-color: '+_defaultOverlayBackgroundColor+'\'>'
-						+ ' <div style=\'width: 80%; height: 12vmin; position: absolute; left: 10%; top: 50%; margin-top: -6vmin; text-align: center;\'>'
-							+ ' <font style=\'color: '+_defaultFontColor+'; line-height: 7vmin; font-size: 4vmin; font-family: '+_defaultFontFamily+'\'>'+title+'</font><br>'
-							+ ' <font style=\'color: '+_defaultFontColor+'; line-height: 5vmin; font-size: 3vmin; font-family: '+_defaultFontFamily+'\'>'+message+'</font>'
-						+ ' </div>'
+						+ ' <div style=\'width: 80%; height: min(12vmin, 72px); position: absolute; left: 10%; top: 50%; margin-top: max(-6vmin, -36px); text-align: center;\'>'
+						+ ' <font style=\'color: '+_defaultFontColor+'; line-height: min(7vmin, 42px); font-size: min(4vmin, 24px); font-family: '+_defaultFontFamily+'\'>'+title+'</font><br>'
+						+ ' <font style=\'color: '+_defaultFontColor+'; line-height: min(5vmin, 30px); font-size: min(3vmin, 18px); font-family: '+_defaultFontFamily+'\'>'+message+'</font>'
+					+ ' </div>'
 					+ ' </div>'
 				);
 			}
@@ -3715,6 +3780,171 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 			}
 		}
 	}
+
+	var monitorApiStatusTimeout = null;
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  onConfig     On configuration
+	 * @param      {<type>}  afterConfig  The after configuration
+	 * @param      {number}  interval     The interval
+	 */
+	this.startMonitorApiStatus = function(onConfig, afterConfig, interval)
+	{
+		if(isNull(onConfig) || !isObject(onConfig))
+		{	
+			onConfig = {
+				'httpStatusCode': {
+					0: 'showDisconnected',
+					503: 'showMaintenance'
+				}
+			};
+		}
+
+		if(isNull(afterConfig) || !isObject(afterConfig))
+		{	
+			afterConfig = {
+				'httpStatusCode': {
+					0: 'reloadApplication',
+					503: 'reloadApplication'
+				}
+			};
+		}
+
+		if(!isset(interval) || (parseInt(interval) < 0))
+		{
+			interval = 5000;
+		}
+
+		_monitorApiStatus(onConfig, afterConfig, interval);
+	};
+
+	/**
+	 * Stops a monitor api status.
+	 */
+	this.stopMonitorApiStatus = function()
+	{
+		monitorApiStatusTimeout = myClearTimeout(monitorApiStatusTimeout);
+	};
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  onConfig     On configuration
+	 * @param      {<type>}  afterConfig  The after configuration
+	 * @param      {<type>}  interval     The interval
+	 */
+	var _monitorApiStatus = function(onConfig, afterConfig, interval)
+	{
+		monitorApiStatusTimeout = myClearTimeout(monitorApiStatusTimeout);
+
+		apiConnector.status(function(response, xhr)
+		{
+			return false;	
+		}, function(error, response, xhr)
+		{
+			return false;
+		}, function(response, xhr)
+		{
+			if(!_handleConfig(response, onConfig, 'on'))
+			{
+				_handleConfig(response, afterConfig, 'after');
+			}
+
+			monitorApiStatusTimeout = mySetTimeout(monitorApiStatusTimeout, function()
+			{
+				_monitorApiStatus(onConfig, afterConfig, interval);
+			}, interval);
+			return false;
+		});
+	}
+
+	var _raisedConfigs = [];
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  response  The response
+	 * @param      {string}  config    The configuration
+	 * @param      {string}  moment    The moment
+	 */
+	var _handleConfig = function(response, config, moment)
+	{
+		var actionHandled = false;
+
+		$.each(config, function(config, options)
+		{
+			var checkValue = null;
+
+			switch(config)
+			{
+				case 'httpStatusCode':
+					checkValue = parseInt(extract(response, 'httpStatusCode'));
+					break;
+			}
+
+			console.group('checkValue: ' + checkValue);
+
+			if(!isNull(checkValue))
+			{
+				$.each(options, function(value, action)
+				{
+					console.log('value: ' + value);
+					
+					var raisedConfig = config+'-'+value;
+					console.log('raisedConfig: ' + raisedConfig);
+
+					if((moment == 'on') && (value == checkValue) && ($.inArray(raisedConfig, _raisedConfigs) == -1))
+					{
+						console.error('RAISE ' + raisedConfig);
+						console.log('action: ' + action);
+
+						_raisedConfigs.push(raisedConfig);
+						_handleAction(action);
+						actionHandled = true;
+					}
+					else if((moment == 'after') && (value != checkValue) && ($.inArray(raisedConfig, _raisedConfigs) > -1))
+					{
+						console.warn('UNRAISE ' + raisedConfig);
+						console.log('action: ' + action);
+
+						_raisedConfigs = removeFromArray(_raisedConfigs, raisedConfig);
+						_handleAction(action);
+						actionHandled = true;
+					}
+				});
+			}
+
+			console.groupEnd();
+		});
+
+		return actionHandled;
+	}
+
+	/**
+	 * { function_description }
+	 *
+	 * @param      {<type>}  action  The action
+	 */
+	var _handleAction = function(action)
+	{				
+		switch(action)
+		{
+			case 'showDisconnected':
+				_showDisconnected();
+				break;
+
+			case 'showMaintenance':
+				_showMaintenance();
+				break;
+
+			case 'reloadApplication':
+				this.doReload(null, null, true);
+				break;
+		}
+
+	}.bind(this);
 
 	/// -------------------------------------------------------------------------
 	///
@@ -4914,7 +5144,13 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 							{
 								callbackSuccess(true, false, {});
 							}
-
+						}
+						else
+						{
+							//
+							_disconnectFromCoCoSAPI();
+							showNoLicense();
+							_scheduleReload();
 						}
 					}
 					else if(isObject(rqh) && isFunction(rqh.getHttpStatusCode) && (rqh.getHttpStatusCode() == 403))
@@ -5916,15 +6152,15 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
 							//
 							if(isset(_applicationTextlib[tag.toLowerCase()]) && isset(_applicationTextlib[tag.toLowerCase()][shortCode.toUpperCase()]))
 							{
-								textLabel['' + COCOS_TEXTLIB_GLOBALPREFIX + '' + shortCode.toUpperCase() + ''] = '1'+_applicationTextlib[tag.toLowerCase()][shortCode.toUpperCase()];
+								textLabel['' + COCOS_TEXTLIB_GLOBALPREFIX + '' + shortCode.toUpperCase() + ''] = _applicationTextlib[tag.toLowerCase()][shortCode.toUpperCase()];
 							}
 							else if(isset(initTextlib[tag]) && isset(initTextlib[tag][_applicationLanguage.toUpperCase()]))
 							{
-								textLabel['' + COCOS_TEXTLIB_GLOBALPREFIX + '' + shortCode.toUpperCase() + ''] = '2'+initTextlib[tag][_applicationLanguage.toUpperCase()];
+								textLabel['' + COCOS_TEXTLIB_GLOBALPREFIX + '' + shortCode.toUpperCase() + ''] = initTextlib[tag][_applicationLanguage.toUpperCase()];
 							}
 							else
 							{
-								textLabel['' + COCOS_TEXTLIB_GLOBALPREFIX + '' + shortCode.toUpperCase() + ''] = '3'+COCOS_TEXTLIB_DEFAULTVALUE;
+								textLabel['' + COCOS_TEXTLIB_GLOBALPREFIX + '' + shortCode.toUpperCase() + ''] = COCOS_TEXTLIB_DEFAULTVALUE;
 							}
 						}
 					});
@@ -8233,12 +8469,12 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
     	var _loadingCss = ''
     		+ ' #cocosApplicationLoader { '
   			+ ' position: absolute; ' 
-    			+ ' top: calc(50% - 2vmin); '
-    			+ ' left: calc(50% - 1vmin); '
+    			+ ' top: calc(50% - min(2vmin, 12px)); '
+    			+ ' left: calc(50% - min(1vmin, 6px)); '
     			+ ' color: #FEFEFE; '
-      			+ ' font-size: 2vmin; '
-      			+ ' width: 1.5vmin; '
-      			+ ' height: 1.5vmin; '
+      			+ ' font-size: min(2vmin, 12px); '
+      			+ ' width: min(1.5vmin, 9px); '
+      			+ ' height: min(1.5vmin, 9px); '
       			+ ' border-radius: 50%; '
       			+ ' text-indent: -9999em; '
       			+ ' -webkit-animation: load4 1.3s infinite linear; '
@@ -8246,7 +8482,7 @@ var cocosApplication = function(applicationCallbackFunction, applicationStartImm
       			+ ' -webkit-transform: translateZ(0); '
       			+ ' -ms-transform: translateZ(0); '
       			+ ' transform: translateZ(0); '
-      			+ ' margin-top: 1.5vmin; '
+      			+ ' margin-top: min(1.5vmin, 9px); '
 		+ ' } '
 		+ ' '
 		+ ' @-webkit-keyframes load4 { '

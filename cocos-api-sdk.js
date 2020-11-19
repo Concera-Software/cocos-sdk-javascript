@@ -8,8 +8,8 @@
  * @author(s)		Stefan van Buren
  * @copyright 		Concera Software - https://concera.software
  * @dateCreated		2016-??-??
- * @lastChange		2020-10-09
- * @version		1.20.282
+ * @lastChange		2020-11-16
+ * @version		1.20.320
  * -------------------------------------------------------------------------------------------------
  *
  * -- CHANGELOG:
@@ -23,6 +23,9 @@
  *  date		version		who
  *  	[Type] what...
  *  	[Type] what else...
+ *
+ *  2020-11-16		1.20.320	SvB
+ *  	[Added] Added variable for timeout during upload (between 2 parts/chunks of a file).
  *
  *  2020-10-09		1.20.282	SvB
  *  	[Changed] Changed the handling of an request. As soon as the request reaches readySate 3
@@ -6651,6 +6654,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 	 
 		var _file_size = file.size;
 		var _chunk_size = (1024 * 1024); // 1MB
+		var _upload_interval = 50; // 50ms
 		var _range_start = 0;
 		var _range_end = _chunk_size;
 		var _uploadId = '';
@@ -6732,7 +6736,7 @@ var cocosAPI = function(host, path, apiKey, freshStart)
 									//
 									_upload();
 								},
-								50
+								_upload_interval
 							);
 						}
 					}
